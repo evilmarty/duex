@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -93,7 +94,11 @@ type model struct {
 	scannedPaths []string
 	progressChan chan string
 	list         list.Model
+	cancel       context.CancelFunc
+	history      []string
 }
+
+
 
 type analyzeMsg struct {
 	path  string
@@ -128,14 +133,20 @@ func (m model) Init() tea.Cmd {
 	m.progressChan = make(chan string, 100)
 	return tea.Batch(
 		m.spinner.Tick,
-		m.analyze(m.path),
+		m.startScan(m.path),
 		m.waitForProgress(m.progressChan),
 	)
 }
 
-func (m model) analyze(targetPath string) tea.Cmd {
+func (m *model) startScan(targetPath string) tea.Cmd {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(targetPath, m.progressChan)
+		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan)
 		if err != nil {
 			return err
 		}
@@ -154,8 +165,6 @@ func (m model) waitForProgress(sub chan string) tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -166,33 +175,68 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize(msg.Width-40, msg.Height-10)
+		return m, nil
 
 	case tea.KeyMsg:
-		// When filtering, let the list handle everything
-		if m.list.FilterState() == list.Filtering {
-			break
-		}
-
+		// Global keys
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		}
 
-		case "up", "k", "down", "j":
-			m.list, _ = m.list.Update(msg)
+		if m.loading {
+			switch msg.String() {
+			case "esc":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				if len(m.history) > 0 {
+					// Return to previous directory
+					prev := m.history[len(m.history)-1]
+					m.history = m.history[:len(m.history)-1]
+					m.path = prev
+					if cached, ok := m.dirCache[prev]; ok {
+						m.setItems(cached)
+						m.loading = false
+						return m, nil
+					}
+					// Re-scan previous if not cached
+					m.loading = true
+					m.scannedPaths = nil
+					m.progressChan = make(chan string, 100)
+					return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
+				}
+				// Initial scan with no history - do nothing
+			}
 			return m, nil
+		}
+
+		// Not loading - browsing state
+		if m.list.FilterState() == list.Filtering {
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
+
+		switch msg.String() {
+		case "up", "k", "down", "j":
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
 
 		case "r":
 			m.loading = true
 			m.scannedPaths = nil
 			m.progressChan = make(chan string, 100)
 			delete(m.dirCache, m.path)
-			return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
+			return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
 
 		case "enter":
 			selectedItem := m.list.SelectedItem()
 			if selectedItem != nil {
 				selected := selectedItem.(item).FileInfo
 				if selected.IsDir {
+					m.history = append(m.history, m.path)
 					newPath := selected.Path
 					if cached, ok := m.dirCache[newPath]; ok {
 						m.path = newPath
@@ -204,13 +248,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.loading = true
 					m.scannedPaths = nil
 					m.progressChan = make(chan string, 100)
-					return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
+					return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
 				}
 			}
 
-		case "backspace", "esc":
+		case "backspace":
+			// Go Up (Parent)
 			parent := filepath.Dir(m.path)
 			if parent != m.path {
+				m.history = append(m.history, m.path)
 				if cached, ok := m.dirCache[parent]; ok {
 					m.path = parent
 					m.setItems(cached)
@@ -221,14 +267,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loading = true
 				m.scannedPaths = nil
 				m.progressChan = make(chan string, 100)
-				return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
+				return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
 			}
 		}
 
 	case progressMsg:
 		if m.loading {
 			m.scannedPaths = append(m.scannedPaths, string(msg))
-			maxItems := m.height - 5
+			maxItems := m.height - 7
 			if maxItems < 1 {
 				maxItems = 1
 			}
@@ -248,15 +294,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case error:
+		if msg == context.Canceled {
+			return m, nil // Ignore cancellation errors
+		}
 		m.err = msg
 		m.loading = false
 	}
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
-	cmds = append(cmds, cmd)
-
-	return m, tea.Batch(cmds...)
+	return m, cmd
 }
 
 func (m *model) setItems(files []analyzer.FileInfo) {
@@ -270,6 +317,7 @@ func (m *model) setItems(files []analyzer.FileInfo) {
 	}
 	m.list.SetItems(items)
 	m.list.ResetSelected()
+	m.list.ResetFilter()
 }
 
 func (m model) View() string {
@@ -283,6 +331,7 @@ func (m model) View() string {
 		for _, p := range m.scannedPaths {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
 		}
+		s.WriteString("\n (q: quit, esc: cancel)\n")
 		return s.String()
 	}
 

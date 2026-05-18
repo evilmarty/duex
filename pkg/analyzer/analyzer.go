@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ type Result struct {
 }
 
 // Analyze scans the given path and returns the size of each entry and the total size.
-func Analyze(root string, progress chan<- string) (Result, error) {
+func Analyze(ctx context.Context, root string, progress chan<- string) (Result, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return Result{}, err
@@ -43,6 +44,10 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 	var seen sync.Map
 
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+
 		path := filepath.Join(root, entry.Name())
 		sendProgress(progress, path)
 		info, err := entry.Info()
@@ -54,7 +59,7 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown := DirSize(p, progress, &seen)
+				size, breakdown := DirSize(ctx, p, progress, &seen)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:      n,
@@ -83,13 +88,16 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 }
 
 // DirSize calculates the total size of a directory recursively and its breakdown.
-func DirSize(path string, progress chan<- string, seen *sync.Map) (int64, []Breakdown) {
+func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map) (int64, []Breakdown) {
 	var size int64
 	extensions := make(map[string]int64)
 
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		sendProgress(progress, p)
 		if !d.IsDir() {
