@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -9,6 +10,7 @@ import (
 
 	"dude/pkg/analyzer"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -43,10 +45,44 @@ var (
 			Padding(1, 2)
 )
 
+type item struct {
+	analyzer.FileInfo
+}
+
+func (i item) Title() string       { return i.Name }
+func (i item) Description() string { return formatSize(i.Size) }
+func (i item) FilterValue() string { return i.Name }
+
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int                               { return 1 }
+func (d itemDelegate) Spacing() int                              { return 0 }
+func (d itemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(item)
+	if !ok {
+		return
+	}
+
+	str := i.Name
+	if i.IsDir {
+		str += "/"
+	}
+
+	cursor := " "
+	style := itemStyle
+	if index == m.Index() {
+		cursor = ">"
+		style = selectedItemStyle
+	}
+
+	sizeStr := formatSize(i.Size)
+	line := fmt.Sprintf("%s %-30s %s", cursor, truncate(str, 30), sizeStyle.Render(sizeStr))
+	fmt.Fprint(w, style.Render(line))
+}
+
 type model struct {
 	path           string
-	files          []analyzer.FileInfo
-	cursor         int
 	selected       map[int]struct{}
 	err            error
 	loading        bool
@@ -57,6 +93,7 @@ type model struct {
 	spinner        spinner.Model
 	scannedPaths   []string
 	progressChan   chan string
+	list           list.Model
 }
 
 type analyzeMsg struct {
@@ -76,6 +113,13 @@ func initialModel(path string) model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
 
+	l := list.New([]list.Item{}, itemDelegate{}, 0, 0)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.SetShowHelp(false)
+	l.Styles.PaginationStyle = lipgloss.NewStyle().PaddingLeft(2)
+
 	return model{
 		path:           path,
 		selected:       make(map[int]struct{}),
@@ -83,6 +127,7 @@ func initialModel(path string) model {
 		dirCache:       make(map[string][]analyzer.FileInfo),
 		breakdownCache: make(map[string][]analyzer.Breakdown),
 		spinner:        s,
+		list:           l,
 	}
 }
 
@@ -116,14 +161,15 @@ func (m model) waitForProgress(sub chan string) tea.Cmd {
 }
 
 func (m model) triggerBreakdown() tea.Cmd {
-	if len(m.files) == 0 {
+	selectedItem := m.list.SelectedItem()
+	if selectedItem == nil {
 		return nil
 	}
-	selected := m.files[m.cursor]
+	selected := selectedItem.(item).FileInfo
 	if selected.IsDir {
 		if _, ok := m.breakdownCache[selected.Path]; !ok {
 			return func() tea.Msg {
-				// We reuse the same progress mechanism for breakdown if needed,
+				// We reuse the same progress mechanism for breakdown if needed, 
 				// but for now let's just use it for the main scan.
 				return breakdownMsg{path: selected.Path, breakdown: analyzer.GetBreakdown(selected.Path, nil)}
 			}
@@ -133,6 +179,8 @@ func (m model) triggerBreakdown() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -142,23 +190,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.list.SetSize(msg.Width-40, msg.Height-10)
 
 	case tea.KeyMsg:
+		// When filtering, let the list handle everything
+		if m.list.FilterState() == list.Filtering {
+			break
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-				return m, m.triggerBreakdown()
-			}
-
-		case "down", "j":
-			if m.cursor < len(m.files)-1 {
-				m.cursor++
-				return m, m.triggerBreakdown()
-			}
+		case "up", "k", "down", "j":
+			// We'll let the list handle these, but we need to trigger a breakdown afterwards.
+			// However, since Update returns a command, we batch it.
+			m.list, _ = m.list.Update(msg)
+			return m, m.triggerBreakdown()
 
 		case "r":
 			m.loading = true
@@ -174,21 +222,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 
 		case "enter":
-			if len(m.files) > 0 && m.files[m.cursor].IsDir {
-				newPath := m.files[m.cursor].Path
-				if cached, ok := m.dirCache[newPath]; ok {
+			selectedItem := m.list.SelectedItem()
+			if selectedItem != nil {
+				selected := selectedItem.(item).FileInfo
+				if selected.IsDir {
+					newPath := selected.Path
+					if cached, ok := m.dirCache[newPath]; ok {
+						m.path = newPath
+						m.setItems(cached)
+						return m, m.triggerBreakdown()
+					}
 					m.path = newPath
-					m.files = cached
-					m.cursor = 0
-					return m, m.triggerBreakdown()
+					m.setItems(nil)
+					m.loading = true
+					m.scannedPaths = nil
+					m.progressChan = make(chan string, 100)
+					return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 				}
-				m.path = newPath
-				m.files = nil
-				m.cursor = 0
-				m.loading = true
-				m.scannedPaths = nil
-				m.progressChan = make(chan string, 100)
-				return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 			}
 
 		case "backspace", "esc":
@@ -196,13 +246,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if parent != m.path {
 				if cached, ok := m.dirCache[parent]; ok {
 					m.path = parent
-					m.files = cached
-					m.cursor = 0
+					m.setItems(cached)
 					return m, m.triggerBreakdown()
 				}
 				m.path = parent
-				m.files = nil
-				m.cursor = 0
+				m.setItems(nil)
 				m.loading = true
 				m.scannedPaths = nil
 				m.progressChan = make(chan string, 100)
@@ -227,11 +275,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.path == m.path {
 			m.loading = false
 			m.scannedPaths = nil
-			m.files = msg.files
-			sort.Slice(m.files, func(i, j int) bool {
-				return m.files[i].Size > m.files[j].Size
-			})
-			m.dirCache[m.path] = m.files
+			m.setItems(msg.files)
+			m.dirCache[m.path] = msg.files
 			return m, m.triggerBreakdown()
 		}
 
@@ -243,7 +288,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 	}
 
-	return m, nil
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *model) setItems(files []analyzer.FileInfo) {
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Size > files[j].Size
+	})
+
+	var items []list.Item
+	for _, f := range files {
+		items = append(items, item{f})
+	}
+	m.list.SetItems(items)
+	m.list.ResetSelected()
 }
 
 func (m model) View() string {
@@ -264,30 +326,13 @@ func (m model) View() string {
 	leftPane.WriteString(titleStyle.Render("dude - Disk Usage Explorer"))
 	leftPane.WriteString("\n\n")
 	leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
-
-	for i, file := range m.files {
-		cursor := " "
-		style := itemStyle
-		if m.cursor == i {
-			cursor = ">"
-			style = selectedItemStyle
-		}
-
-		name := file.Name
-		if file.IsDir {
-			name += "/"
-		}
-
-		sizeStr := formatSize(file.Size)
-		line := fmt.Sprintf("%s %-30s %s", cursor, truncate(name, 30), sizeStyle.Render(sizeStr))
-		leftPane.WriteString(style.Render(line) + "\n")
-	}
-
-	leftPane.WriteString("\n (q: quit, r: refresh, enter: open, backspace: up)\n")
+	leftPane.WriteString(m.list.View())
+	leftPane.WriteString("\n (q: quit, r: refresh, enter: open, backspace: up, /: filter)\n")
 
 	var rightPane strings.Builder
-	if len(m.files) > 0 {
-		selected := m.files[m.cursor]
+	selectedItem := m.list.SelectedItem()
+	if selectedItem != nil {
+		selected := selectedItem.(item).FileInfo
 		rightPane.WriteString(lipgloss.NewStyle().Bold(true).Render("Details") + "\n\n")
 		rightPane.WriteString(fmt.Sprintf("Name: %s\n", selected.Name))
 		rightPane.WriteString(fmt.Sprintf("Size: %s\n", formatSize(selected.Size)))
