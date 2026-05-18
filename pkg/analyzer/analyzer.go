@@ -33,6 +33,7 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var result Result
+	var seen sync.Map
 
 	for _, entry := range entries {
 		path := filepath.Join(root, entry.Name())
@@ -46,7 +47,7 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size := DirSize(p, progress)
+				size := DirSize(p, progress, &seen)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:  n,
@@ -58,7 +59,7 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 				mu.Unlock()
 			}(path, entry.Name())
 		} else {
-			size := info.Size()
+			size := getPhysicalSize(info, &seen)
 			result.Files = append(result.Files, FileInfo{
 				Name:  entry.Name(),
 				Path:  path,
@@ -74,7 +75,7 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 }
 
 // DirSize calculates the total size of a directory recursively.
-func DirSize(path string, progress chan<- string) int64 {
+func DirSize(path string, progress chan<- string, seen *sync.Map) int64 {
 	var size int64
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -84,12 +85,22 @@ func DirSize(path string, progress chan<- string) int64 {
 		if !d.IsDir() {
 			info, err := d.Info()
 			if err == nil {
-				size += info.Size()
+				size += getPhysicalSize(info, seen)
 			}
 		}
 		return nil
 	})
 	return size
+}
+
+func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {
+	stats := getFileStats(info)
+	if stats.Multi && seen != nil {
+		if _, loaded := seen.LoadOrStore(stats.ID, struct{}{}); loaded {
+			return 0
+		}
+	}
+	return stats.Size
 }
 
 func sendProgress(progress chan<- string, path string) {
@@ -110,6 +121,7 @@ type Breakdown struct {
 // GetBreakdown calculates the size breakdown of a directory by file extension.
 func GetBreakdown(path string, progress chan<- string) []Breakdown {
 	extensions := make(map[string]int64)
+	var seen sync.Map
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -126,7 +138,7 @@ func GetBreakdown(path string, progress chan<- string) []Breakdown {
 		}
 		info, err := d.Info()
 		if err == nil {
-			extensions[ext] += info.Size()
+			extensions[ext] += getPhysicalSize(info, &seen)
 		}
 		return nil
 	})
