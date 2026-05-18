@@ -82,28 +82,22 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 }
 
 type model struct {
-	path           string
-	selected       map[int]struct{}
-	err            error
-	loading        bool
-	width          int
-	height         int
-	dirCache       map[string][]analyzer.FileInfo
-	breakdownCache map[string][]analyzer.Breakdown
-	spinner        spinner.Model
-	scannedPaths   []string
-	progressChan   chan string
-	list           list.Model
+	path         string
+	selected     map[int]struct{}
+	err          error
+	loading      bool
+	width        int
+	height       int
+	dirCache     map[string][]analyzer.FileInfo
+	spinner      spinner.Model
+	scannedPaths []string
+	progressChan chan string
+	list         list.Model
 }
 
 type analyzeMsg struct {
 	path  string
 	files []analyzer.FileInfo
-}
-
-type breakdownMsg struct {
-	path      string
-	breakdown []analyzer.Breakdown
 }
 
 type progressMsg string
@@ -121,13 +115,12 @@ func initialModel(path string) model {
 	l.Styles.PaginationStyle = lipgloss.NewStyle().PaddingLeft(2)
 
 	return model{
-		path:           path,
-		selected:       make(map[int]struct{}),
-		loading:        true,
-		dirCache:       make(map[string][]analyzer.FileInfo),
-		breakdownCache: make(map[string][]analyzer.Breakdown),
-		spinner:        s,
-		list:           l,
+		path:         path,
+		selected:     make(map[int]struct{}),
+		loading:      true,
+		dirCache:     make(map[string][]analyzer.FileInfo),
+		spinner:      s,
+		list:         l,
 	}
 }
 
@@ -160,24 +153,6 @@ func (m model) waitForProgress(sub chan string) tea.Cmd {
 	}
 }
 
-func (m model) triggerBreakdown() tea.Cmd {
-	selectedItem := m.list.SelectedItem()
-	if selectedItem == nil {
-		return nil
-	}
-	selected := selectedItem.(item).FileInfo
-	if selected.IsDir {
-		if _, ok := m.breakdownCache[selected.Path]; !ok {
-			return func() tea.Msg {
-				// We reuse the same progress mechanism for breakdown if needed, 
-				// but for now let's just use it for the main scan.
-				return breakdownMsg{path: selected.Path, breakdown: analyzer.GetBreakdown(selected.Path, nil)}
-			}
-		}
-	}
-	return nil
-}
-
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -203,22 +178,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "up", "k", "down", "j":
-			// We'll let the list handle these, but we need to trigger a breakdown afterwards.
-			// However, since Update returns a command, we batch it.
 			m.list, _ = m.list.Update(msg)
-			return m, m.triggerBreakdown()
+			return m, nil
 
 		case "r":
 			m.loading = true
 			m.scannedPaths = nil
 			m.progressChan = make(chan string, 100)
 			delete(m.dirCache, m.path)
-			// Also clear breakdowns for children to ensure a deep refresh if requested
-			for k := range m.breakdownCache {
-				if strings.HasPrefix(k, m.path) {
-					delete(m.breakdownCache, k)
-				}
-			}
 			return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 
 		case "enter":
@@ -230,7 +197,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if cached, ok := m.dirCache[newPath]; ok {
 						m.path = newPath
 						m.setItems(cached)
-						return m, m.triggerBreakdown()
+						return m, nil
 					}
 					m.path = newPath
 					m.setItems(nil)
@@ -247,7 +214,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cached, ok := m.dirCache[parent]; ok {
 					m.path = parent
 					m.setItems(cached)
-					return m, m.triggerBreakdown()
+					return m, nil
 				}
 				m.path = parent
 				m.setItems(nil)
@@ -277,11 +244,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scannedPaths = nil
 			m.setItems(msg.files)
 			m.dirCache[m.path] = msg.files
-			return m, m.triggerBreakdown()
+			return m, nil
 		}
-
-	case breakdownMsg:
-		m.breakdownCache[msg.path] = msg.breakdown
 
 	case error:
 		m.err = msg
@@ -340,16 +304,12 @@ func (m model) View() string {
 
 		if selected.IsDir {
 			rightPane.WriteString("\n" + lipgloss.NewStyle().Bold(true).Render("Breakdown") + "\n")
-			if breakdown, ok := m.breakdownCache[selected.Path]; ok {
-				for i, b := range breakdown {
-					if i > 10 {
-						rightPane.WriteString("  ...\n")
-						break
-					}
-					rightPane.WriteString(fmt.Sprintf("  %-10s %s\n", b.Extension, formatSize(b.Size)))
+			for i, b := range selected.Breakdown {
+				if i > 10 {
+					rightPane.WriteString("  ...\n")
+					break
 				}
-			} else {
-				rightPane.WriteString(fmt.Sprintf("  %s Scanning...\n", m.spinner.View()))
+				rightPane.WriteString(fmt.Sprintf("  %-10s %s\n", b.Extension, formatSize(b.Size)))
 			}
 		}
 	}

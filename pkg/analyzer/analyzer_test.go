@@ -49,6 +49,34 @@ func TestAnalyze(t *testing.T) {
 	if result.TotalSize != expectedTotal {
 		t.Errorf("Expected total size %d, got %d", expectedTotal, result.TotalSize)
 	}
+
+	// Verify breakdown for subdir
+	foundSubdir := false
+	for _, f := range result.Files {
+		if f.Name == "subdir" {
+			foundSubdir = true
+			if len(f.Breakdown) == 0 {
+				t.Error("Expected breakdown for subdir, got empty")
+			}
+			foundTxt := false
+			for _, b := range f.Breakdown {
+				if b.Extension == ".txt" {
+					foundTxt = true
+					info, _ := os.Stat(file2)
+					expected := getFileStats(info).Size
+					if b.Size != expected {
+						t.Errorf("Expected .txt size %d for subdir, got %d", expected, b.Size)
+					}
+				}
+			}
+			if !foundTxt {
+				t.Error("Expected .txt in subdir breakdown")
+			}
+		}
+	}
+	if !foundSubdir {
+		t.Error("Expected to find 'subdir' in results")
+	}
 }
 
 func TestAnalyzeHardLinks(t *testing.T) {

@@ -9,12 +9,19 @@ import (
 	"sync"
 )
 
+// Breakdown represents a breakdown of file sizes by extension.
+type Breakdown struct {
+	Extension string
+	Size      int64
+}
+
 // FileInfo represents information about a file or directory.
 type FileInfo struct {
-	Name  string
-	Path  string
-	Size  int64
-	IsDir bool
+	Name      string
+	Path      string
+	Size      int64
+	IsDir     bool
+	Breakdown []Breakdown
 }
 
 // Result contains the analysis results for a directory.
@@ -47,13 +54,14 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size := DirSize(p, progress, &seen)
+				size, breakdown := DirSize(p, progress, &seen)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
-					Name:  n,
-					Path:  p,
-					Size:  size,
-					IsDir: true,
+					Name:      n,
+					Path:      p,
+					Size:      size,
+					IsDir:     true,
+					Breakdown: breakdown,
 				})
 				result.TotalSize += size
 				mu.Unlock()
@@ -74,9 +82,11 @@ func Analyze(root string, progress chan<- string) (Result, error) {
 	return result, nil
 }
 
-// DirSize calculates the total size of a directory recursively.
-func DirSize(path string, progress chan<- string, seen *sync.Map) int64 {
+// DirSize calculates the total size of a directory recursively and its breakdown.
+func DirSize(path string, progress chan<- string, seen *sync.Map) (int64, []Breakdown) {
 	var size int64
+	extensions := make(map[string]int64)
+
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -85,12 +95,31 @@ func DirSize(path string, progress chan<- string, seen *sync.Map) int64 {
 		if !d.IsDir() {
 			info, err := d.Info()
 			if err == nil {
-				size += getPhysicalSize(info, seen)
+				s := getPhysicalSize(info, seen)
+				size += s
+
+				ext := filepath.Ext(d.Name())
+				if ext == "" {
+					ext = "Other"
+				} else {
+					ext = strings.ToLower(ext)
+				}
+				extensions[ext] += s
 			}
 		}
 		return nil
 	})
-	return size
+
+	var breakdown []Breakdown
+	for ext, s := range extensions {
+		breakdown = append(breakdown, Breakdown{Extension: ext, Size: s})
+	}
+
+	sort.Slice(breakdown, func(i, j int) bool {
+		return breakdown[i].Size > breakdown[j].Size
+	})
+
+	return size, breakdown
 }
 
 func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {
@@ -110,47 +139,4 @@ func sendProgress(progress chan<- string, path string) {
 		default:
 		}
 	}
-}
-
-// Breakdown represents a breakdown of file sizes by extension.
-type Breakdown struct {
-	Extension string
-	Size      int64
-}
-
-// GetBreakdown calculates the size breakdown of a directory by file extension.
-func GetBreakdown(path string, progress chan<- string) []Breakdown {
-	extensions := make(map[string]int64)
-	var seen sync.Map
-	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		sendProgress(progress, p)
-		if d.IsDir() {
-			return nil
-		}
-		ext := filepath.Ext(d.Name())
-		if ext == "" {
-			ext = "Other"
-		} else {
-			ext = strings.ToLower(ext)
-		}
-		info, err := d.Info()
-		if err == nil {
-			extensions[ext] += getPhysicalSize(info, &seen)
-		}
-		return nil
-	})
-
-	var result []Breakdown
-	for ext, size := range extensions {
-		result = append(result, Breakdown{Extension: ext, Size: size})
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Size > result[j].Size
-	})
-
-	return result
 }
