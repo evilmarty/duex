@@ -89,7 +89,7 @@ type model struct {
 	loading      bool
 	width        int
 	height       int
-	dirCache     map[string][]analyzer.FileInfo
+	dirCache     map[string]analyzer.Result
 	spinner      spinner.Model
 	scannedPaths []string
 	progressChan chan string
@@ -98,12 +98,11 @@ type model struct {
 	history      []string
 }
 
-
-
 type analyzeMsg struct {
-	path  string
-	files []analyzer.FileInfo
+	path   string
+	result analyzer.Result
 }
+
 
 type progressMsg string
 
@@ -123,7 +122,7 @@ func initialModel(path string) model {
 		path:         path,
 		selected:     make(map[int]struct{}),
 		loading:      true,
-		dirCache:     make(map[string][]analyzer.FileInfo),
+		dirCache:     make(map[string]analyzer.Result),
 		spinner:      s,
 		list:         l,
 	}
@@ -150,7 +149,7 @@ func (m *model) startScan(targetPath string) tea.Cmd {
 		if err != nil {
 			return err
 		}
-		return analyzeMsg{path: targetPath, files: res.Files}
+		return analyzeMsg{path: targetPath, result: res}
 	}
 }
 
@@ -235,7 +234,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedItem := m.list.SelectedItem()
 			if selectedItem != nil {
 				selected := selectedItem.(item).FileInfo
-				if selected.IsDir {
+				if selected.IsDir && selected.Name != "." {
 					m.history = append(m.history, m.path)
 					newPath := selected.Path
 					if cached, ok := m.dirCache[newPath]; ok {
@@ -244,7 +243,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					m.path = newPath
-					m.setItems(nil)
+					m.setItems(analyzer.Result{})
 					m.loading = true
 					m.scannedPaths = nil
 					m.progressChan = make(chan string, 100)
@@ -263,7 +262,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.path = parent
-				m.setItems(nil)
+				m.setItems(analyzer.Result{})
+				m.loading = true
+				m.scannedPaths = nil
+				m.progressChan = make(chan string, 100)
+				return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
+			}
+
+		case "esc":
+			if m.cancel != nil {
+				m.cancel()
+			}
+			// Go Back (History)
+			if len(m.history) > 0 {
+				prev := m.history[len(m.history)-1]
+				m.history = m.history[:len(m.history)-1]
+				m.path = prev
+				if cached, ok := m.dirCache[prev]; ok {
+					m.path = prev
+					m.setItems(cached)
+					return m, nil
+				}
 				m.loading = true
 				m.scannedPaths = nil
 				m.progressChan = make(chan string, 100)
@@ -288,8 +307,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.path == m.path {
 			m.loading = false
 			m.scannedPaths = nil
-			m.setItems(msg.files)
-			m.dirCache[m.path] = msg.files
+			m.setItems(msg.result)
+			m.dirCache[m.path] = msg.result
 			return m, nil
 		}
 
@@ -306,12 +325,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *model) setItems(files []analyzer.FileInfo) {
+func (m *model) setItems(res analyzer.Result) {
+	files := res.Files
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Size > files[j].Size
 	})
 
 	var items []list.Item
+
+	// Inject current directory item if we have data
+	if res.TotalSize > 0 || len(res.Breakdown) > 0 {
+		items = append(items, item{analyzer.FileInfo{
+			Name:      ".",
+			Path:      m.path,
+			Size:      res.TotalSize,
+			IsDir:     true,
+			Breakdown: res.Breakdown,
+		}})
+	}
+
 	for _, f := range files {
 		items = append(items, item{f})
 	}

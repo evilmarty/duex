@@ -27,8 +27,9 @@ type FileInfo struct {
 
 // Result contains the analysis results for a directory.
 type Result struct {
-	Files []FileInfo
+	Files     []FileInfo
 	TotalSize int64
+	Breakdown []Breakdown
 }
 
 // Analyze scans the given path and returns the size of each entry and the total size.
@@ -73,17 +74,41 @@ func Analyze(ctx context.Context, root string, progress chan<- string) (Result, 
 			}(path, entry.Name())
 		} else {
 			size := getPhysicalSize(info, &seen)
+			ext := filepath.Ext(entry.Name())
+			if ext == "" || len(ext) > 15 {
+				ext = "Other"
+			} else {
+				ext = strings.ToLower(ext)
+			}
 			result.Files = append(result.Files, FileInfo{
 				Name:  entry.Name(),
 				Path:  path,
 				Size:  size,
 				IsDir: false,
+				Breakdown: []Breakdown{
+					{Extension: ext, Size: size},
+				},
 			})
 			result.TotalSize += size
 		}
 	}
 
 	wg.Wait()
+
+	// Aggregate root breakdown
+	extMap := make(map[string]int64)
+	for _, f := range result.Files {
+		for _, b := range f.Breakdown {
+			extMap[b.Extension] += b.Size
+		}
+	}
+	for ext, s := range extMap {
+		result.Breakdown = append(result.Breakdown, Breakdown{Extension: ext, Size: s})
+	}
+	sort.Slice(result.Breakdown, func(i, j int) bool {
+		return result.Breakdown[i].Size > result.Breakdown[j].Size
+	})
+
 	return result, nil
 }
 

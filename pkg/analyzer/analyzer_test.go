@@ -78,6 +78,23 @@ func TestAnalyze(t *testing.T) {
 	if !foundSubdir {
 		t.Error("Expected to find 'subdir' in results")
 	}
+
+	// Verify aggregate breakdown
+	if len(result.Breakdown) == 0 {
+		t.Error("Expected root aggregate breakdown, got empty")
+	}
+	foundTxtAtRoot := false
+	for _, b := range result.Breakdown {
+		if b.Extension == ".txt" {
+			foundTxtAtRoot = true
+			if b.Size != expectedTotal {
+				t.Errorf("Expected root breakdown .txt size %d, got %d", expectedTotal, b.Size)
+			}
+		}
+	}
+	if !foundTxtAtRoot {
+		t.Error("Expected .txt in root aggregate breakdown")
+	}
 }
 
 func TestAnalyzeHardLinks(t *testing.T) {
