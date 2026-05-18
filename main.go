@@ -330,7 +330,7 @@ func getType(f analyzer.FileInfo) string {
 		return "Directory"
 	}
 	ext := filepath.Ext(f.Name)
-	if ext == "" {
+	if ext == "" || len(ext) > 15 {
 		return "File"
 	}
 	return strings.ToUpper(ext[1:]) + " File"

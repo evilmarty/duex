@@ -99,7 +99,7 @@ func DirSize(path string, progress chan<- string, seen *sync.Map) (int64, []Brea
 				size += s
 
 				ext := filepath.Ext(d.Name())
-				if ext == "" {
+				if ext == "" || len(ext) > 15 {
 					ext = "Other"
 				} else {
 					ext = strings.ToLower(ext)

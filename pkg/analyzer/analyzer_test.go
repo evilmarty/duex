@@ -118,3 +118,53 @@ func TestAnalyzeHardLinks(t *testing.T) {
 		t.Errorf("Expected total size %d (counted once), got %d", expectedSize, result.TotalSize)
 	}
 }
+
+func TestAnalyzeLongExtension(t *testing.T) {
+	// Create a temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "dude-longext-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a file with an excessively long extension
+	longExt := ".a0~__CX9j0QIqNd7exyZ5zPlE5EeM6jzt86awZCKR-eN68wV7qfj5P60gacfUh7oVojv9yXCYXkP7JcIuyx3AdRXg=="
+	fileName := "data" + longExt
+	filePath := filepath.Join(tmpDir, fileName)
+	content := []byte("some content")
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
+		t.Fatalf("Failed to create file with long extension: %v", err)
+	}
+
+	result, err := Analyze(tmpDir, nil)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Verify breakdown grouping
+	// The file should be grouped under "Other"
+	foundOther := false
+
+	// Revised approach: check breakdown of a subdirectory containing the long extension file
+	subDir := filepath.Join(tmpDir, "sub")
+	os.Mkdir(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "file"+longExt), content, 0644)
+
+	result, _ = Analyze(tmpDir, nil)
+	for _, f := range result.Files {
+		if f.Name == "sub" {
+			for _, b := range f.Breakdown {
+				if b.Extension == "Other" {
+					foundOther = true
+				}
+				if b.Extension == longExt {
+					t.Errorf("Should NOT find long extension %s in breakdown", longExt)
+				}
+			}
+		}
+	}
+
+	if !foundOther {
+		t.Error("Expected to find 'Other' in breakdown for file with long extension")
+	}
+}
