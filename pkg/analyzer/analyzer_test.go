@@ -30,7 +30,7 @@ func TestAnalyze(t *testing.T) {
 		t.Fatalf("Failed to create file2: %v", err)
 	}
 
-	result, err := Analyze(tmpDir)
+	result, err := Analyze(tmpDir, nil)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}

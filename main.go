@@ -30,6 +30,8 @@ var (
 
 	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 
+	faintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+
 	detailStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, false, true).
 			BorderForeground(lipgloss.Color("#7D56F4")).
@@ -53,6 +55,8 @@ type model struct {
 	dirCache       map[string][]analyzer.FileInfo
 	breakdownCache map[string][]analyzer.Breakdown
 	spinner        spinner.Model
+	scannedPaths   []string
+	progressChan   chan string
 }
 
 type analyzeMsg struct {
@@ -64,6 +68,8 @@ type breakdownMsg struct {
 	path      string
 	breakdown []analyzer.Breakdown
 }
+
+type progressMsg string
 
 func initialModel(path string) model {
 	s := spinner.New()
@@ -81,16 +87,31 @@ func initialModel(path string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.analyze(m.path))
+	m.progressChan = make(chan string, 100)
+	return tea.Batch(
+		m.spinner.Tick,
+		m.analyze(m.path),
+		m.waitForProgress(m.progressChan),
+	)
 }
 
 func (m model) analyze(targetPath string) tea.Cmd {
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(targetPath)
+		res, err := analyzer.Analyze(targetPath, m.progressChan)
 		if err != nil {
 			return err
 		}
 		return analyzeMsg{path: targetPath, files: res.Files}
+	}
+}
+
+func (m model) waitForProgress(sub chan string) tea.Cmd {
+	return func() tea.Msg {
+		path, ok := <-sub
+		if !ok {
+			return nil
+		}
+		return progressMsg(path)
 	}
 }
 
@@ -102,7 +123,9 @@ func (m model) triggerBreakdown() tea.Cmd {
 	if selected.IsDir {
 		if _, ok := m.breakdownCache[selected.Path]; !ok {
 			return func() tea.Msg {
-				return breakdownMsg{path: selected.Path, breakdown: analyzer.GetBreakdown(selected.Path)}
+				// We reuse the same progress mechanism for breakdown if needed,
+				// but for now let's just use it for the main scan.
+				return breakdownMsg{path: selected.Path, breakdown: analyzer.GetBreakdown(selected.Path, nil)}
 			}
 		}
 	}
@@ -139,6 +162,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "r":
 			m.loading = true
+			m.scannedPaths = nil
+			m.progressChan = make(chan string, 100)
 			delete(m.dirCache, m.path)
 			// Also clear breakdowns for children to ensure a deep refresh if requested
 			for k := range m.breakdownCache {
@@ -146,7 +171,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					delete(m.breakdownCache, k)
 				}
 			}
-			return m, m.analyze(m.path)
+			return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 
 		case "enter":
 			if len(m.files) > 0 && m.files[m.cursor].IsDir {
@@ -161,7 +186,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.files = nil
 				m.cursor = 0
 				m.loading = true
-				return m, m.analyze(m.path)
+				m.scannedPaths = nil
+				m.progressChan = make(chan string, 100)
+				return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 			}
 
 		case "backspace", "esc":
@@ -177,13 +204,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.files = nil
 				m.cursor = 0
 				m.loading = true
-				return m, m.analyze(m.path)
+				m.scannedPaths = nil
+				m.progressChan = make(chan string, 100)
+				return m, tea.Batch(m.analyze(m.path), m.waitForProgress(m.progressChan))
 			}
+		}
+
+	case progressMsg:
+		if m.loading {
+			m.scannedPaths = append(m.scannedPaths, string(msg))
+			maxItems := m.height - 5
+			if maxItems < 1 {
+				maxItems = 1
+			}
+			if len(m.scannedPaths) > maxItems {
+				m.scannedPaths = m.scannedPaths[len(m.scannedPaths)-maxItems:]
+			}
+			return m, m.waitForProgress(m.progressChan)
 		}
 
 	case analyzeMsg:
 		if msg.path == m.path {
 			m.loading = false
+			m.scannedPaths = nil
 			m.files = msg.files
 			sort.Slice(m.files, func(i, j int) bool {
 				return m.files[i].Size > m.files[j].Size
@@ -209,7 +252,12 @@ func (m model) View() string {
 	}
 
 	if m.loading {
-		return fmt.Sprintf("\n  %s Scanning directory...", m.spinner.View())
+		var s strings.Builder
+		s.WriteString(fmt.Sprintf("\n  %s Scanning directory...\n\n", m.spinner.View()))
+		for _, p := range m.scannedPaths {
+			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
+		}
+		return s.String()
 	}
 
 	var leftPane strings.Builder

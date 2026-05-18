@@ -24,7 +24,7 @@ type Result struct {
 }
 
 // Analyze scans the given path and returns the size of each entry and the total size.
-func Analyze(root string) (Result, error) {
+func Analyze(root string, progress chan<- string) (Result, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return Result{}, err
@@ -36,6 +36,7 @@ func Analyze(root string) (Result, error) {
 
 	for _, entry := range entries {
 		path := filepath.Join(root, entry.Name())
+		sendProgress(progress, path)
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -45,7 +46,7 @@ func Analyze(root string) (Result, error) {
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size := DirSize(p)
+				size := DirSize(p, progress)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:  n,
@@ -73,12 +74,13 @@ func Analyze(root string) (Result, error) {
 }
 
 // DirSize calculates the total size of a directory recursively.
-func DirSize(path string) int64 {
+func DirSize(path string, progress chan<- string) int64 {
 	var size int64
-	filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
+		sendProgress(progress, p)
 		if !d.IsDir() {
 			info, err := d.Info()
 			if err == nil {
@@ -90,6 +92,15 @@ func DirSize(path string) int64 {
 	return size
 }
 
+func sendProgress(progress chan<- string, path string) {
+	if progress != nil {
+		select {
+		case progress <- path:
+		default:
+		}
+	}
+}
+
 // Breakdown represents a breakdown of file sizes by extension.
 type Breakdown struct {
 	Extension string
@@ -97,10 +108,14 @@ type Breakdown struct {
 }
 
 // GetBreakdown calculates the size breakdown of a directory by file extension.
-func GetBreakdown(path string) []Breakdown {
+func GetBreakdown(path string, progress chan<- string) []Breakdown {
 	extensions := make(map[string]int64)
-	filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		sendProgress(progress, p)
+		if d.IsDir() {
 			return nil
 		}
 		ext := filepath.Ext(d.Name())
