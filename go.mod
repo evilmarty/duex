@@ -1,4 +1,4 @@
-module dude
+module duex
 
 go 1.26.3
 

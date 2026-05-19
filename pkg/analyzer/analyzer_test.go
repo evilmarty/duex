@@ -9,7 +9,7 @@ import (
 
 func TestAnalyze(t *testing.T) {
 	// Create a temporary directory for testing
-	tmpDir, err := os.MkdirTemp("", "dude-test")
+	tmpDir, err := os.MkdirTemp("", "duex-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestAnalyze(t *testing.T) {
 
 func TestAnalyzeHardLinks(t *testing.T) {
 	// Create a temporary directory for testing
-	tmpDir, err := os.MkdirTemp("", "dude-hardlink-test")
+	tmpDir, err := os.MkdirTemp("", "duex-hardlink-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestAnalyzeHardLinks(t *testing.T) {
 
 func TestAnalyzeLongExtension(t *testing.T) {
 	// Create a temporary directory for testing
-	tmpDir, err := os.MkdirTemp("", "dude-longext-test")
+	tmpDir, err := os.MkdirTemp("", "duex-longext-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 }
 
 func TestAnalyzeCancellation(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "dude-cancel-test")
+	tmpDir, err := os.MkdirTemp("", "duex-cancel-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestAnalyzeCancellation(t *testing.T) {
 }
 
 func TestAnalyzeProgress(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "dude-progress-test")
+	tmpDir, err := os.MkdirTemp("", "duex-progress-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}

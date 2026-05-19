@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"dude/pkg/analyzer"
+	"duex/pkg/analyzer"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -427,7 +427,7 @@ func (m model) View() string {
 		return fmt.Sprintf("Error: %v", m.err)
 	}
 
-	header := titleStyle.Render("dude - Disk Usage Explorer")
+	header := titleStyle.Render("duex - Disk Usage Explorer")
 	var content string
 
 	if m.loading {
