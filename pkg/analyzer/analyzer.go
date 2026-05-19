@@ -33,7 +33,7 @@ type Result struct {
 }
 
 // Analyze scans the given path and returns the size of each entry and the total size.
-func Analyze(ctx context.Context, root string, progress chan<- string) (Result, error) {
+func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result) (Result, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return Result{}, err
@@ -57,10 +57,24 @@ func Analyze(ctx context.Context, root string, progress chan<- string) (Result, 
 		}
 
 		if entry.IsDir() {
+			if cached, ok := cache[path]; ok {
+				mu.Lock()
+				result.Files = append(result.Files, FileInfo{
+					Name:      entry.Name(),
+					Path:      path,
+					Size:      cached.TotalSize,
+					IsDir:     true,
+					Breakdown: cached.Breakdown,
+				})
+				result.TotalSize += cached.TotalSize
+				mu.Unlock()
+				continue
+			}
+
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown := DirSize(ctx, p, progress, &seen)
+				size, breakdown := DirSize(ctx, p, progress, &seen, cache)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:      n,
@@ -113,7 +127,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string) (Result, 
 }
 
 // DirSize calculates the total size of a directory recursively and its breakdown.
-func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map) (int64, []Breakdown) {
+func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result) (int64, []Breakdown) {
 	var size int64
 	extensions := make(map[string]int64)
 
@@ -125,6 +139,17 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 			return ctx.Err()
 		}
 		sendProgress(progress, p)
+
+		if d.IsDir() && p != path {
+			if cached, ok := cache[p]; ok {
+				size += cached.TotalSize
+				for _, b := range cached.Breakdown {
+					extensions[b.Extension] += b.Size
+				}
+				return filepath.SkipDir
+			}
+		}
+
 		if !d.IsDir() {
 			info, err := d.Info()
 			if err == nil {

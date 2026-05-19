@@ -225,7 +225,7 @@ func (m *model) startScan(targetPath string) tea.Cmd {
 	m.cancel = cancel
 
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan)
+		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache)
 		if err != nil {
 			return err
 		}

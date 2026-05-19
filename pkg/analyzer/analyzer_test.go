@@ -31,7 +31,7 @@ func TestAnalyze(t *testing.T) {
 		t.Fatalf("Failed to create file2: %v", err)
 	}
 
-	result, err := Analyze(context.Background(),tmpDir, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestAnalyzeHardLinks(t *testing.T) {
 		t.Skip("Hard links not supported on this filesystem")
 	}
 
-	result, err := Analyze(context.Background(),tmpDir, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 		t.Fatalf("Failed to create file with long extension: %v", err)
 	}
 
-	result, err := Analyze(context.Background(),tmpDir, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 	os.Mkdir(subDir, 0755)
 	os.WriteFile(filepath.Join(subDir, "file"+longExt), content, 0644)
 
-	result, _ = Analyze(context.Background(),tmpDir, nil)
+	result, _ = Analyze(context.Background(), tmpDir, nil, nil)
 	for _, f := range result.Files {
 		if f.Name == "sub" {
 			for _, b := range f.Breakdown {
@@ -199,7 +199,7 @@ func TestAnalyzeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err = Analyze(ctx, tmpDir, nil)
+	_, err = Analyze(ctx, tmpDir, nil, nil)
 	if err != context.Canceled {
 		t.Errorf("Expected context.Canceled error, got: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestAnalyzeProgress(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("data"), 0644)
 
 	progress := make(chan string, 10)
-	_, err = Analyze(context.Background(), tmpDir, progress)
+	_, err = Analyze(context.Background(), tmpDir, progress, nil)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestAnalyzeProgress(t *testing.T) {
 
 func TestAnalyzeErrors(t *testing.T) {
 	// Create non-existent directory
-	_, err := Analyze(context.Background(), "/non/existent/path", nil)
+	_, err := Analyze(context.Background(), "/non/existent/path", nil, nil)
 	if err == nil {
 		t.Error("Expected error for non-existent directory, got nil")
 	}
