@@ -65,7 +65,7 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Cancel, k.Quit}
+	return []key.Binding{k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -77,6 +77,13 @@ func (k keyMap) FullHelp() [][]key.Binding {
 
 func (k keyMap) BrowsingHelp() []key.Binding {
 	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Refresh, k.Filter, k.Quit}
+}
+
+func (k keyMap) ScanningHelp(hasHistory bool) []key.Binding {
+	if hasHistory {
+		return []key.Binding{k.Cancel, k.Quit}
+	}
+	return []key.Binding{k.Quit}
 }
 
 var keys = keyMap{
@@ -436,9 +443,11 @@ func (m model) View() string {
 		for _, p := range m.scannedPaths {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
 		}
-		helpView := "\n" + m.help.View(keys)
+
+		helpView := "\n" + m.help.ShortHelpView(keys.ScanningHelp(len(m.history) > 0))
 		content = s.String() + helpView
 	} else {
+
 		var leftPane strings.Builder
 		leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
 		leftPane.WriteString(m.list.View())
