@@ -186,3 +186,68 @@ func TestAnalyzeLongExtension(t *testing.T) {
 		t.Error("Expected to find 'Other' in breakdown for file with long extension")
 	}
 }
+
+func TestAnalyzeCancellation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "dude-cancel-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("data"), 0644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err = Analyze(ctx, tmpDir, nil)
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled error, got: %v", err)
+	}
+}
+
+func TestAnalyzeProgress(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "dude-progress-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("data"), 0644)
+
+	progress := make(chan string, 10)
+	_, err = Analyze(context.Background(), tmpDir, progress)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	select {
+	case <-progress:
+		// Success
+	default:
+		t.Error("Expected progress update, but channel was empty")
+	}
+}
+
+func TestAnalyzeErrors(t *testing.T) {
+	// Create non-existent directory
+	_, err := Analyze(context.Background(), "/non/existent/path", nil)
+	if err == nil {
+		t.Error("Expected error for non-existent directory, got nil")
+	}
+}
+
+type mockFileInfo struct {
+	os.FileInfo
+}
+
+func (m mockFileInfo) Sys() interface{} { return nil }
+func (m mockFileInfo) Size() int64      { return 0 }
+
+func TestGetFileStatsFallback(t *testing.T) {
+	// Test the case where Sys() is nil
+	info := mockFileInfo{}
+	stats := getFileStats(info)
+	if stats.Multi != false {
+		t.Error("Expected Multi to be false for nil Sys()")
+	}
+}

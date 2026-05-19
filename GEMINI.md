@@ -10,8 +10,10 @@
 *   **Build:** `go build -o dude`
 *   **Run:** `./dude [path]` (defaults to `.`)
 *   **Test:** `go test ./...`
+*   **Coverage:** `go test -cover ./...` (individual packages) or `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out` (full project breakdown)
 
 ## Development Conventions
 *   Follow standard Go idiomatic patterns.
 *   Use `Lip Gloss` for all styling.
+*   Maintain a minimum of 95% code coverage for core packages (e.g., `pkg/analyzer`).
 *   Implement concurrent scanning for the analyzer.
