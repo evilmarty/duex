@@ -1,3 +1,4 @@
+version: 2
 project_name: duex
 before:
   hooks:
@@ -21,7 +22,8 @@ builds:
       - "-s -w -X main.BuildDate={{ .Date }} -X main.Version={{ .Version }} -X main.Commit={{.Commit}}"
 archives:
   - name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
-    format: binary
+    formats:
+      - binary
 brews:
   - directory: Formula
     homepage: "https://github.com/evilmarty/duex"
@@ -58,7 +60,7 @@ checksum:
   name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
   algorithm: sha256
 snapshot:
-  name_template: "{{ incpatch .Version }}-devel"
+  version_template: "{{ incpatch .Version }}-devel"
 changelog:
   use: git
   sort: asc
