@@ -1,0 +1,72 @@
+project_name: duex
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm
+      - arm64
+    goarm:
+      - "5"
+      - "6"
+      - "7"
+    ldflags:
+      - "-s -w -X main.BuildDate={{ .Date }} -X main.Version={{ .Version }} -X main.Commit={{.Commit}}"
+archives:
+  - name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    format: binary
+brews:
+  - directory: Formula
+    homepage: "https://github.com/evilmarty/duex"
+    description: "Duex is a Go-based terminal utility for visualizing and analyzing disk usage, featuring interactive navigation, accurate sizing, and real-time feedback."
+    license: "MIT"
+    custom_block: |
+      head do
+        url "https://github.com/evilmarty/duex.git", branch: "main"
+        depends_on "go" => :build
+      end
+    install: |
+      if head?
+        ldflags = %W[
+          -s -w -X main.BuildDate=#{time.iso8601} -X main.Version=#{version} -X main.Commit=#{Utils.git_head}
+        ]
+        system "go", "build", *std_go_args(ldflags:)
+      else
+        bin.install Dir["#{name}-*"].first => name
+      end
+    test: |
+      version_output = shell_output(bin/"duex --version")
+      assert_match "duex version #{version}", version_output
+    repository:
+      owner: evilmarty
+      name: homebrew-duex
+      branch: main
+release:
+  name_template: "{{ .Tag }}"
+  target_commitish: "{{ .Commit }}"
+  github:
+    owner: evilmarty
+    name: duex
+checksum:
+  name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
+  algorithm: sha256
+snapshot:
+  name_template: "{{ incpatch .Version }}-devel"
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "README"
+      - "^docs:"
+      - "^test:"
+# modelines, feel free to remove those if you don't want/use them:
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj

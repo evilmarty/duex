@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - go.sum
+      - go.mod
+      - .github/workflows/ci.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.go"
+      - go.sum
+      - go.mod
+      - .github/workflows/ci.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get Go version
+        id: version
+        run: awk '{if($1 == "go") print "version=" $2}' go.mod >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{steps.version.outputs.version}}
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v ./...
