@@ -501,6 +501,8 @@ func getType(f analyzer.FileInfo) string {
 	return strings.ToUpper(ext[1:]) + " File"
 }
 
+var Version = "dev"
+
 func formatSize(b int64) string {
 	const unit = 1024
 	if b < unit {
@@ -514,10 +516,45 @@ func formatSize(b int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
+func showHelp() {
+	fmt.Println("duex - Disk Usage Explorer")
+	fmt.Println("\nUsage:")
+	fmt.Println("  duex [path] [flags]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  -h, --help      Show this help message")
+	fmt.Println("  -v, --version   Show application version")
+	fmt.Println("\nArguments:")
+	fmt.Println("  path            The directory to scan (defaults to current directory)")
+}
+
 func main() {
 	path := "."
-	if len(os.Args) > 1 {
-		path = os.Args[1]
+	args := os.Args[1:]
+	pathSet := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "-h", "--help":
+			showHelp()
+			return
+		case "-v", "--version":
+			fmt.Printf("duex version %s\n", Version)
+			return
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Printf("Error: unknown flag %s\n\n", arg)
+				showHelp()
+				os.Exit(1)
+			}
+			if pathSet {
+				fmt.Printf("Error: too many arguments provided\n\n")
+				showHelp()
+				os.Exit(1)
+			}
+			path = arg
+			pathSet = true
+		}
 	}
 
 	absPath, err := filepath.Abs(path)
@@ -526,7 +563,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(initialModel(absPath))
+	p := tea.NewProgram(initialModel(absPath), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
 		os.Exit(1)

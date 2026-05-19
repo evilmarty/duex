@@ -31,3 +31,9 @@
 ### Charm Ecosystem Idioms
 *   **Custom List Delegates:** Prefer `bubbles/list` for scrollable interfaces. Implement a custom `list.ItemDelegate` to maintain custom aesthetics while retaining built-in list features like filtering and pagination.
 *   **Help Component:** Manage keyboard shortcuts using `bubbles/help` and `bubbles/key` for dynamic, context-aware help footers that adapt to the application state (e.g., loading vs. browsing).
+
+## Build and Versioning
+*   **Build-time Versioning:** Use Go's `-ldflags` to set the version string at build-time. This allows the `--version` flag to display accurate release information.
+    ```bash
+    go build -ldflags="-X main.Version=v1.0.0" -o duex
+    ```

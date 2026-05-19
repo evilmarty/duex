@@ -21,7 +21,7 @@ Clone the repository and build the executable:
 ```bash
 git clone https://github.com/evilmarty/duex
 cd duex
-go build -o duex
+go build -ldflags="-X main.Version=v1.0.0" -o duex
 ```
 
 You can then move the `duex` binary to a location in your `$PATH`.
@@ -37,6 +37,13 @@ Or provide a specific path to scan:
 ```bash
 ./duex /path/to/scan
 ```
+
+### CLI Flags
+
+| Flag | Description |
+| :--- | :--- |
+| `-h`, `--help` | Show usage instructions |
+| `-v`, `--version` | Show application version |
 
 ### Keyboard Shortcuts
 
