@@ -78,7 +78,14 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 
 	sizeStr := formatSize(i.Size)
-	line := fmt.Sprintf("%s %-30s %s", cursor, truncate(str, 30), sizeStyle.Render(sizeStr))
+	// Calculate dynamic width. Subtract cursor(2), size padding(2), and size length.
+	// Ensure we have a minimum width for the name.
+	nameWidth := m.Width() - len(sizeStr) - 5
+	if nameWidth < 10 {
+		nameWidth = 10
+	}
+
+	line := fmt.Sprintf("%s %-*s %s", cursor, nameWidth, truncate(str, nameWidth), sizeStyle.Render(sizeStr))
 	fmt.Fprint(w, style.Render(line))
 }
 
@@ -173,7 +180,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.list.SetSize(msg.Width-40, msg.Height-10)
+
+		// Calculate dynamic dimensions
+		rightWidth := 40
+		leftWidth := m.width - rightWidth - 6
+		if leftWidth < 20 {
+			leftWidth = 20
+		}
+
+		// Overhead: Header(3), Path(2), Footer(2), Padding(2) = 9
+		listHeight := m.height - 10
+		if listHeight < 5 {
+			listHeight = 5
+		}
+
+		m.list.SetSize(leftWidth, listHeight)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -367,12 +388,13 @@ func (m model) View() string {
 		return s.String()
 	}
 
+	var header strings.Builder
+	header.WriteString(titleStyle.Render("dude - Disk Usage Explorer"))
+	header.WriteString("\n\n")
+
 	var leftPane strings.Builder
-	leftPane.WriteString(titleStyle.Render("dude - Disk Usage Explorer"))
-	leftPane.WriteString("\n\n")
 	leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
 	leftPane.WriteString(m.list.View())
-	leftPane.WriteString("\n (q: quit, r: refresh, enter: open, backspace: up, /: filter)\n")
 
 	var rightPane strings.Builder
 	selectedItem := m.list.SelectedItem()
@@ -384,19 +406,36 @@ func (m model) View() string {
 		rightPane.WriteString(fmt.Sprintf("Type: %s\n", getType(selected)))
 
 		if selected.IsDir {
-			rightPane.WriteString("\n" + lipgloss.NewStyle().Bold(true).Render("Breakdown") + "\n")
-			for i, b := range selected.Breakdown {
-				if i > 10 {
-					rightPane.WriteString("  ...\n")
-					break
+			// Calculate available height for breakdown.
+			// Overhead: "Details"(1), \n(1), Name(1), Size(1), Type(1), \n(1), "Breakdown"(1) = 7 lines.
+			// Plus we need at least 1 line for "..." or an item.
+			availableHeight := m.list.Height() - 7
+			if availableHeight > 0 {
+				rightPane.WriteString("\n" + lipgloss.NewStyle().Bold(true).Render("Breakdown") + "\n")
+				for i, b := range selected.Breakdown {
+					if i >= availableHeight-1 && i < len(selected.Breakdown)-1 {
+						rightPane.WriteString("  ...\n")
+						break
+					}
+					rightPane.WriteString(fmt.Sprintf("  %-10s %s\n", b.Extension, formatSize(b.Size)))
 				}
-				rightPane.WriteString(fmt.Sprintf("  %-10s %s\n", b.Extension, formatSize(b.Size)))
 			}
 		}
 	}
 
-	content := lipgloss.JoinHorizontal(lipgloss.Top, leftPane.String(), detailStyle.Render(rightPane.String()))
-	return containerStyle.Render(content)
+	// Join panes horizontally
+	mainContent := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftPane.String(),
+		detailStyle.Height(m.list.Height()+2).Render(rightPane.String()),
+	)
+
+	var footer strings.Builder
+	footer.WriteString("\n (q: quit, r: refresh, enter: open, backspace: up, /: filter)\n")
+
+	return containerStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Left, header.String(), mainContent, footer.String()),
+	)
 }
 
 func truncate(s string, max int) string {
