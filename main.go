@@ -11,6 +11,8 @@ import (
 
 	"dude/pkg/analyzer"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -49,6 +51,67 @@ var (
 
 type item struct {
 	analyzer.FileInfo
+}
+
+type keyMap struct {
+	Up      key.Binding
+	Down    key.Binding
+	Enter   key.Binding
+	Back    key.Binding
+	Cancel  key.Binding
+	Refresh key.Binding
+	Filter  key.Binding
+	Quit    key.Binding
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Cancel, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.Enter, k.Back},
+		{k.Refresh, k.Filter, k.Quit},
+	}
+}
+
+func (k keyMap) BrowsingHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Refresh, k.Filter, k.Quit}
+}
+
+var keys = keyMap{
+	Up: key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "up"),
+	),
+	Down: key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "down"),
+	),
+	Enter: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "open"),
+	),
+	Back: key.NewBinding(
+		key.WithKeys("backspace"),
+		key.WithHelp("backspace", "up"),
+	),
+	Cancel: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "cancel"),
+	),
+	Refresh: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "refresh"),
+	),
+	Filter: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "filter"),
+	),
+	Quit: key.NewBinding(
+		key.WithKeys("q", "ctrl+c"),
+		key.WithHelp("q", "quit"),
+	),
 }
 
 func (i item) Title() string       { return i.Name }
@@ -104,6 +167,7 @@ type model struct {
 	list         list.Model
 	cancel       context.CancelFunc
 	history      []string
+	help         help.Model
 }
 
 type analyzeMsg struct {
@@ -133,6 +197,7 @@ func initialModel(path string) model {
 		dirCache:     make(map[string]analyzer.Result),
 		spinner:      s,
 		list:         l,
+		help:         help.New(),
 	}
 }
 
@@ -371,8 +436,8 @@ func (m model) View() string {
 		for _, p := range m.scannedPaths {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
 		}
-		s.WriteString("\n (q: quit, esc: cancel)\n")
-		content = s.String()
+		helpView := "\n" + m.help.View(keys)
+		content = s.String() + helpView
 	} else {
 		var leftPane strings.Builder
 		leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
@@ -408,8 +473,8 @@ func (m model) View() string {
 			detailStyle.Height(m.list.Height()+2).Render(rightPane.String()),
 		)
 
-		footer := "\n (q: quit, r: refresh, enter: open, backspace: up, /: filter)\n"
-		content = mainContent + footer
+		helpView := "\n" + m.help.ShortHelpView(keys.BrowsingHelp())
+		content = mainContent + helpView
 	}
 
 	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, content))
