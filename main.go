@@ -292,24 +292,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "esc":
-			if m.cancel != nil {
-				m.cancel()
-			}
-			// Go Back (History)
-			if len(m.history) > 0 {
-				prev := m.history[len(m.history)-1]
-				m.history = m.history[:len(m.history)-1]
-				m.path = prev
-				if cached, ok := m.dirCache[prev]; ok {
-					m.path = prev
-					m.setItems(cached)
-					return m, nil
-				}
-				m.loading = true
-				m.scannedPaths = nil
-				m.progressChan = make(chan string, 100)
-				return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
-			}
+			return m, nil // Explicitly ignore esc to prevent list component from quitting
 		}
 
 	case progressMsg:
