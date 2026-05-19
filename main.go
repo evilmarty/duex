@@ -22,7 +22,8 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("#FAFAFA")).
 			Background(lipgloss.Color("#7D56F4")).
-			Padding(0, 1)
+			Padding(0, 1).
+			MarginBottom(1)
 
 	itemStyle = lipgloss.NewStyle().PaddingLeft(2)
 
@@ -43,7 +44,7 @@ var (
 			Width(40)
 
 	containerStyle = lipgloss.NewStyle().
-			Padding(1, 2)
+			Padding(0, 2)
 )
 
 type item struct {
@@ -378,67 +379,63 @@ func (m model) View() string {
 		return fmt.Sprintf("Error: %v", m.err)
 	}
 
+	header := titleStyle.Render("dude - Disk Usage Explorer")
+	var content string
+
 	if m.loading {
 		var s strings.Builder
-		s.WriteString(fmt.Sprintf("\n  %s Scanning directory...\n\n", m.spinner.View()))
+		s.WriteString(fmt.Sprintf("%s Scanning directory...\n\n", m.spinner.View()))
 		for _, p := range m.scannedPaths {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
 		}
 		s.WriteString("\n (q: quit, esc: cancel)\n")
-		return s.String()
-	}
+		content = s.String()
+	} else {
+		var leftPane strings.Builder
+		leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
+		leftPane.WriteString(m.list.View())
 
-	var header strings.Builder
-	header.WriteString(titleStyle.Render("dude - Disk Usage Explorer"))
-	header.WriteString("\n\n")
+		var rightPane strings.Builder
+		selectedItem := m.list.SelectedItem()
+		if selectedItem != nil {
+			selected := selectedItem.(item).FileInfo
+			rightPane.WriteString(lipgloss.NewStyle().Bold(true).Render("Details") + "\n\n")
+			rightPane.WriteString(fmt.Sprintf("Name: %s\n", selected.Name))
+			rightPane.WriteString(fmt.Sprintf("Size: %s\n", formatSize(selected.Size)))
+			rightPane.WriteString(fmt.Sprintf("Type: %s\n", getType(selected)))
 
-	var leftPane strings.Builder
-	leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
-	leftPane.WriteString(m.list.View())
-
-	var rightPane strings.Builder
-	selectedItem := m.list.SelectedItem()
-	if selectedItem != nil {
-		selected := selectedItem.(item).FileInfo
-		rightPane.WriteString(lipgloss.NewStyle().Bold(true).Render("Details") + "\n\n")
-		rightPane.WriteString(fmt.Sprintf("Name: %s\n", selected.Name))
-		rightPane.WriteString(fmt.Sprintf("Size: %s\n", formatSize(selected.Size)))
-		rightPane.WriteString(fmt.Sprintf("Type: %s\n", getType(selected)))
-
-		if selected.IsDir {
-			// Calculate available height for breakdown.
-			// Overhead: "Details"(1), \n(1), Name(1), Size(1), Type(1), \n(1), "Breakdown"(1) = 7 lines.
-			// Plus we need at least 1 line for "..." or an item.
-			availableHeight := m.list.Height() - 7
-			if availableHeight > 0 {
-				rightPane.WriteString("\n" + lipgloss.NewStyle().Bold(true).Render("Breakdown") + "\n")
-				for i, b := range selected.Breakdown {
-					if i >= availableHeight-1 && i < len(selected.Breakdown)-1 {
-						rightPane.WriteString("  ...\n")
-						break
+			if selected.IsDir {
+				availableHeight := m.list.Height() - 7
+				if availableHeight > 0 {
+					rightPane.WriteString("\n" + lipgloss.NewStyle().Bold(true).Render("Breakdown") + "\n")
+					for i, b := range selected.Breakdown {
+						if i >= availableHeight-1 && i < len(selected.Breakdown)-1 {
+							rightPane.WriteString("  ...\n")
+							break
+						}
+						rightPane.WriteString(fmt.Sprintf("  %-10s %s\n", b.Extension, formatSize(b.Size)))
 					}
-					rightPane.WriteString(fmt.Sprintf("  %-10s %s\n", b.Extension, formatSize(b.Size)))
 				}
 			}
 		}
+
+		mainContent := lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			leftPane.String(),
+			detailStyle.Height(m.list.Height()+2).Render(rightPane.String()),
+		)
+
+		footer := "\n (q: quit, r: refresh, enter: open, backspace: up, /: filter)\n"
+		content = mainContent + footer
 	}
 
-	// Join panes horizontally
-	mainContent := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftPane.String(),
-		detailStyle.Height(m.list.Height()+2).Render(rightPane.String()),
-	)
-
-	var footer strings.Builder
-	footer.WriteString("\n (q: quit, r: refresh, enter: open, backspace: up, /: filter)\n")
-
-	return containerStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left, header.String(), mainContent, footer.String()),
-	)
+	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, content))
 }
 
 func truncate(s string, max int) string {
+	if max < 4 {
+		return "..."
+	}
 	if len(s) > max {
 		return s[:max-3] + "..."
 	}
