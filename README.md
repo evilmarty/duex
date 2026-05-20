@@ -12,7 +12,19 @@
 *   **Filter & Search**: Quickly find specific files in large directories.
 *   **Safe Navigation**: Cancel long-running scans instantly with `esc`.
 
-## Building and Installation
+## Installation
+
+### Using Homebrew
+
+```bash
+brew install evilmarty/duex/duex
+```
+
+### Pre-built Binaries
+
+You can download the latest release from [GitHub Releases](https://github.com/evilmarty/duex/releases/latest).
+
+### Building from Source
 
 Make sure you have [Go](https://golang.org/) installed.
 
