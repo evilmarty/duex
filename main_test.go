@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -648,6 +649,126 @@ func TestUpdateEdgeCases(t *testing.T) {
 	m8.loading = false
 	msgUnk := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
 	_, _ = m8.Update(msgUnk)
+}
+
+func TestParseFlags(t *testing.T) {
+	tests := []struct {
+		name              string
+		args              []string
+		wantPath          string
+		wantOneFileSystem bool
+		wantShowHelp      bool
+		wantShowVersion   bool
+		wantErr           bool
+	}{
+		{
+			name:              "default args",
+			args:              []string{},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "path only",
+			args:              []string{"/some/path"},
+			wantPath:          "/some/path",
+			wantOneFileSystem: true,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "cross mounts short flag",
+			args:              []string{"-c"},
+			wantPath:          ".",
+			wantOneFileSystem: false,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "cross mounts long flag",
+			args:              []string{"--cross-mounts"},
+			wantPath:          ".",
+			wantOneFileSystem: false,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "help short flag",
+			args:              []string{"-h"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantShowHelp:      true,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "help long flag",
+			args:              []string{"--help"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantShowHelp:      true,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "version short flag",
+			args:              []string{"-v"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantShowHelp:      false,
+			wantShowVersion:   true,
+			wantErr:           false,
+		},
+		{
+			name:              "version long flag",
+			args:              []string{"--version"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantShowHelp:      false,
+			wantShowVersion:   true,
+			wantErr:           false,
+		},
+		{
+			name:    "unknown flag",
+			args:    []string{"-unknown"},
+			wantErr: true,
+		},
+		{
+			name:    "too many arguments",
+			args:    []string{"path1", "path2"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			path, oneFS, help, version, err := parseFlags(&buf, tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseFlags() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if path != tt.wantPath {
+				t.Errorf("path = %q, want %q", path, tt.wantPath)
+			}
+			if oneFS != tt.wantOneFileSystem {
+				t.Errorf("oneFileSystem = %v, want %v", oneFS, tt.wantOneFileSystem)
+			}
+			if help != tt.wantShowHelp {
+				t.Errorf("showHelp = %v, want %v", help, tt.wantShowHelp)
+			}
+			if version != tt.wantShowVersion {
+				t.Errorf("showVersion = %v, want %v", version, tt.wantShowVersion)
+			}
+		})
+	}
 }
 
 func TestShowHelpAndMain(t *testing.T) {

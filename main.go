@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -528,48 +529,77 @@ func formatSize(b int64) string {
 }
 
 func showHelp() {
-	fmt.Println("duex - Disk Usage Explorer")
-	fmt.Println("\nUsage:")
-	fmt.Println("  duex [path] [flags]")
-	fmt.Println("\nFlags:")
-	fmt.Println("  -h, --help            Show this help message")
-	fmt.Println("  -v, --version         Show application version")
-	fmt.Println("  -c, --cross-mounts    Allow crossing filesystem boundaries")
-	fmt.Println("\nArguments:")
-	fmt.Println("  path                  The directory to scan (defaults to current directory)")
+	showHelpWriter(os.Stdout)
+}
+
+func showHelpWriter(w io.Writer) {
+	fmt.Fprintln(w, "duex - Disk Usage Explorer")
+	fmt.Fprintln(w, "\nUsage:")
+	fmt.Fprintln(w, "  duex [path] [flags]")
+	fmt.Fprintln(w, "\nFlags:")
+	fmt.Fprintln(w, "  -h, --help            Show this help message")
+	fmt.Fprintln(w, "  -v, --version         Show application version")
+	fmt.Fprintln(w, "  -c, --cross-mounts    Allow crossing filesystem boundaries")
+	fmt.Fprintln(w, "\nArguments:")
+	fmt.Fprintln(w, "  path                  The directory to scan (defaults to current directory)")
+}
+
+func parseFlags(output io.Writer, args []string) (path string, oneFileSystem bool, showHelp bool, showVersion bool, err error) {
+	fs := flag.NewFlagSet("duex", flag.ContinueOnError)
+	fs.SetOutput(output)
+
+	var crossMounts, c bool
+	var version, v bool
+	var help, h bool
+
+	fs.BoolVar(&crossMounts, "cross-mounts", false, "Allow crossing filesystem boundaries")
+	fs.BoolVar(&c, "c", false, "Allow crossing filesystem boundaries (alias)")
+	fs.BoolVar(&version, "version", false, "Show application version")
+	fs.BoolVar(&v, "v", false, "Show application version (alias)")
+	fs.BoolVar(&help, "help", false, "Show this help message")
+	fs.BoolVar(&h, "h", false, "Show help message (alias)")
+
+	fs.Usage = func() {
+		showHelpWriter(output)
+	}
+
+	err = fs.Parse(args)
+	if err != nil {
+		return "", false, false, false, err
+	}
+
+	showHelp = help || h
+	showVersion = version || v
+	oneFileSystem = !(crossMounts || c)
+
+	parsedArgs := fs.Args()
+	if len(parsedArgs) > 1 {
+		return "", false, false, false, fmt.Errorf("too many arguments provided")
+	}
+
+	path = "."
+	if len(parsedArgs) == 1 {
+		path = parsedArgs[0]
+	}
+
+	return path, oneFileSystem, showHelp, showVersion, nil
 }
 
 func main() {
-	path := "."
-	args := os.Args[1:]
-	pathSet := false
-	oneFileSystem := true
+	path, oneFileSystem, showHelpFlag, showVersionFlag, err := parseFlags(os.Stderr, os.Args[1:])
+	if err != nil {
+		showHelpWriter(os.Stderr)
+		os.Exit(1)
+	}
 
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "-h", "--help":
-			showHelp()
-			return
-		case "-v", "--version":
-			fmt.Printf("duex version %s\n", Version)
-			return
-		case "-c", "--cross-mounts":
-			oneFileSystem = false
-		default:
-			if strings.HasPrefix(arg, "-") {
-				fmt.Printf("Error: unknown flag %s\n\n", arg)
-				showHelp()
-				os.Exit(1)
-			}
-			if pathSet {
-				fmt.Printf("Error: too many arguments provided\n\n")
-				showHelp()
-				os.Exit(1)
-			}
-			path = arg
-			pathSet = true
-		}
+	if showHelpFlag {
+		showHelp()
+		return
+	}
+
+	if showVersionFlag {
+		fmt.Printf("duex version %s\n", Version)
+		return
 	}
 
 	absPath, err := filepath.Abs(path)
