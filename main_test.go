@@ -665,6 +665,13 @@ func TestShowHelpAndMain(t *testing.T) {
 	// Test main() with -v / --version
 	os.Args = []string{"duex", "-v"}
 	main()
+
+	// Test main() with -c / --cross-mounts and -h
+	os.Args = []string{"duex", "-c", "-h"}
+	main()
+
+	os.Args = []string{"duex", "--cross-mounts", "-h"}
+	main()
 }
 
 func TestStartScanAndProgressCommands(t *testing.T) {

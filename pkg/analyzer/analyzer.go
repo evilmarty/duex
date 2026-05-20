@@ -33,10 +33,18 @@ type Result struct {
 }
 
 // Analyze scans the given path and returns the size of each entry and the total size.
-func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result) (Result, error) {
+func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result, oneFileSystem bool) (Result, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return Result{}, err
+	}
+
+	var rootDev uint64
+	if oneFileSystem {
+		rootInfo, err := os.Lstat(root)
+		if err == nil {
+			rootDev = getFileStats(rootInfo).Dev
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -56,7 +64,13 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			continue
 		}
 
+		entryStats := getFileStats(info)
+
 		if entry.IsDir() {
+			if oneFileSystem && entryStats.Dev != rootDev {
+				continue
+			}
+
 			if cached, ok := cache[path]; ok {
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
@@ -74,7 +88,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown := DirSize(ctx, p, progress, &seen, cache)
+				size, breakdown := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:      n,
@@ -127,7 +141,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 }
 
 // DirSize calculates the total size of a directory recursively and its breakdown.
-func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result) (int64, []Breakdown) {
+func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64) (int64, []Breakdown) {
 	var size int64
 	extensions := make(map[string]int64)
 
@@ -140,13 +154,26 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 		}
 		sendProgress(progress, p)
 
-		if d.IsDir() && p != path {
-			if cached, ok := cache[p]; ok {
-				size += cached.TotalSize
-				for _, b := range cached.Breakdown {
-					extensions[b.Extension] += b.Size
+		if d.IsDir() {
+			if oneFileSystem && p != path {
+				info, err := d.Info()
+				if err != nil {
+					return filepath.SkipDir
 				}
-				return filepath.SkipDir
+				dirStats := getFileStats(info)
+				if dirStats.Dev != rootDev {
+					return filepath.SkipDir
+				}
+			}
+
+			if p != path {
+				if cached, ok := cache[p]; ok {
+					size += cached.TotalSize
+					for _, b := range cached.Breakdown {
+						extensions[b.Extension] += b.Size
+					}
+					return filepath.SkipDir
+				}
 			}
 		}
 

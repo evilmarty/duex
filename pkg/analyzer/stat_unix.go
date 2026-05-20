@@ -12,10 +12,11 @@ type fileStats struct {
 	Size  int64
 	ID    uint64
 	Multi bool // True if the file has multiple hard links
+	Dev   uint64
 }
 
 // getFileStats returns the physical size and unique ID of a file.
-func getFileStats(info os.FileInfo) fileStats {
+var getFileStats = func(info os.FileInfo) fileStats {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fileStats{Size: info.Size()}
@@ -29,5 +30,6 @@ func getFileStats(info os.FileInfo) fileStats {
 		Size:  size,
 		ID:    stat.Ino ^ (uint64(stat.Dev) << 32),
 		Multi: stat.Nlink > 1,
+		Dev:   uint64(stat.Dev),
 	}
 }

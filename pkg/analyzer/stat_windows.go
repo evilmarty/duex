@@ -11,12 +11,14 @@ type fileStats struct {
 	Size  int64
 	ID    uint64
 	Multi bool
+	Dev   uint64
 }
 
 // getFileStats returns the logical size for Windows as a fallback.
-func getFileStats(info os.FileInfo) fileStats {
+var getFileStats = func(info os.FileInfo) fileStats {
 	return fileStats{
 		Size:  info.Size(),
 		Multi: false,
+		Dev:   0,
 	}
 }

@@ -161,20 +161,21 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 }
 
 type model struct {
-	path         string
-	selected     map[int]struct{}
-	err          error
-	loading      bool
-	width        int
-	height       int
-	dirCache     map[string]analyzer.Result
-	spinner      spinner.Model
-	scannedPaths []string
-	progressChan chan string
-	list         list.Model
-	cancel       context.CancelFunc
-	history      []string
-	help         help.Model
+	path          string
+	selected      map[int]struct{}
+	err           error
+	loading       bool
+	width         int
+	height        int
+	dirCache      map[string]analyzer.Result
+	spinner       spinner.Model
+	scannedPaths  []string
+	progressChan  chan string
+	list          list.Model
+	cancel        context.CancelFunc
+	history       []string
+	help          help.Model
+	oneFileSystem bool
 }
 
 type analyzeMsg struct {
@@ -198,13 +199,14 @@ func initialModel(path string) model {
 	l.Styles.PaginationStyle = lipgloss.NewStyle().PaddingLeft(2)
 
 	return model{
-		path:         path,
-		selected:     make(map[int]struct{}),
-		loading:      true,
-		dirCache:     make(map[string]analyzer.Result),
-		spinner:      s,
-		list:         l,
-		help:         help.New(),
+		path:          path,
+		selected:      make(map[int]struct{}),
+		loading:       true,
+		dirCache:      make(map[string]analyzer.Result),
+		spinner:       s,
+		list:          l,
+		help:          help.New(),
+		oneFileSystem: true,
 	}
 }
 
@@ -225,7 +227,7 @@ func (m *model) startScan(targetPath string) tea.Cmd {
 	m.cancel = cancel
 
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache)
+		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache, m.oneFileSystem)
 		if err != nil {
 			return err
 		}
@@ -530,16 +532,18 @@ func showHelp() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  duex [path] [flags]")
 	fmt.Println("\nFlags:")
-	fmt.Println("  -h, --help      Show this help message")
-	fmt.Println("  -v, --version   Show application version")
+	fmt.Println("  -h, --help            Show this help message")
+	fmt.Println("  -v, --version         Show application version")
+	fmt.Println("  -c, --cross-mounts    Allow crossing filesystem boundaries")
 	fmt.Println("\nArguments:")
-	fmt.Println("  path            The directory to scan (defaults to current directory)")
+	fmt.Println("  path                  The directory to scan (defaults to current directory)")
 }
 
 func main() {
 	path := "."
 	args := os.Args[1:]
 	pathSet := false
+	oneFileSystem := true
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -550,6 +554,8 @@ func main() {
 		case "-v", "--version":
 			fmt.Printf("duex version %s\n", Version)
 			return
+		case "-c", "--cross-mounts":
+			oneFileSystem = false
 		default:
 			if strings.HasPrefix(arg, "-") {
 				fmt.Printf("Error: unknown flag %s\n\n", arg)
@@ -572,7 +578,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(initialModel(absPath), tea.WithAltScreen())
+	m := initialModel(absPath)
+	m.oneFileSystem = oneFileSystem
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
 		os.Exit(1)

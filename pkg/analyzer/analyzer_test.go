@@ -31,7 +31,7 @@ func TestAnalyze(t *testing.T) {
 		t.Fatalf("Failed to create file2: %v", err)
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestAnalyzeHardLinks(t *testing.T) {
 		t.Skip("Hard links not supported on this filesystem")
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 		t.Fatalf("Failed to create file with long extension: %v", err)
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 	os.Mkdir(subDir, 0755)
 	os.WriteFile(filepath.Join(subDir, "file"+longExt), content, 0644)
 
-	result, _ = Analyze(context.Background(), tmpDir, nil, nil)
+	result, _ = Analyze(context.Background(), tmpDir, nil, nil, false)
 	for _, f := range result.Files {
 		if f.Name == "sub" {
 			for _, b := range f.Breakdown {
@@ -199,7 +199,7 @@ func TestAnalyzeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err = Analyze(ctx, tmpDir, nil, nil)
+	_, err = Analyze(ctx, tmpDir, nil, nil, false)
 	if err != context.Canceled {
 		t.Errorf("Expected context.Canceled error, got: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestAnalyzeProgress(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("data"), 0644)
 
 	progress := make(chan string, 10)
-	_, err = Analyze(context.Background(), tmpDir, progress, nil)
+	_, err = Analyze(context.Background(), tmpDir, progress, nil, false)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestAnalyzeProgress(t *testing.T) {
 
 func TestAnalyzeErrors(t *testing.T) {
 	// Create non-existent directory
-	_, err := Analyze(context.Background(), "/non/existent/path", nil, nil)
+	_, err := Analyze(context.Background(), "/non/existent/path", nil, nil, false)
 	if err == nil {
 		t.Error("Expected error for non-existent directory, got nil")
 	}
@@ -275,7 +275,7 @@ func TestAnalyzeWithCache(t *testing.T) {
 	}
 
 	// This should hit the cache instead of scanning subDir
-	result, err := Analyze(context.Background(), tmpDir, nil, cache)
+	result, err := Analyze(context.Background(), tmpDir, nil, cache, false)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestDirSizeWithCache(t *testing.T) {
 	}
 
 	// Walk parentDir. It should encounter childDir and use cache.
-	size, breakdown := DirSize(context.Background(), parentDir, nil, nil, cache)
+	size, breakdown := DirSize(context.Background(), parentDir, nil, nil, cache, false, 0)
 	if size != 12345 {
 		t.Errorf("Expected size 12345 from cache, got %d", size)
 	}
@@ -329,9 +329,141 @@ func TestDirSizeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	size, _ := DirSize(ctx, tmpDir, nil, nil, nil)
+	size, _ := DirSize(ctx, tmpDir, nil, nil, nil, false, 0)
 	if size != 0 {
 		t.Errorf("Expected 0 size on canceled context, got %d", size)
+	}
+}
+
+func TestAnalyzeOneFileSystem(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "duex-one-fs-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	subDir := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdir: %v", err)
+	}
+
+	file1 := filepath.Join(subDir, "file1.txt")
+	if err := os.WriteFile(file1, []byte("data"), 0644); err != nil {
+		t.Fatalf("Failed to create file1: %v", err)
+	}
+
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, true)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	foundSub := false
+	for _, f := range result.Files {
+		if f.Name == "sub" {
+			foundSub = true
+			if f.Size <= 0 {
+				t.Errorf("Expected positive physical size for subdir, got %d", f.Size)
+			}
+		}
+	}
+	if !foundSub {
+		t.Error("Expected to find and traverse 'sub'")
+	}
+}
+
+func TestAnalyzeOneFileSystemBoundary(t *testing.T) {
+	origGetFileStats := getFileStats
+	defer func() { getFileStats = origGetFileStats }()
+
+	tmpDir, err := os.MkdirTemp("", "duex-one-fs-boundary")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	subDir := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdir: %v", err)
+	}
+
+	file1 := filepath.Join(subDir, "file1.txt")
+	if err := os.WriteFile(file1, []byte("data"), 0644); err != nil {
+		t.Fatalf("Failed to create file1: %v", err)
+	}
+
+	getFileStats = func(info os.FileInfo) fileStats {
+		stats := origGetFileStats(info)
+		if info.Name() == filepath.Base(tmpDir) {
+			stats.Dev = 1
+		} else {
+			stats.Dev = 2
+		}
+		return stats
+	}
+
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, true)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	for _, f := range result.Files {
+		if f.Name == "sub" {
+			t.Error("Expected 'sub' to be skipped due to different device ID")
+		}
+	}
+}
+
+func TestDirSizeOneFileSystemBoundary(t *testing.T) {
+	origGetFileStats := getFileStats
+	defer func() { getFileStats = origGetFileStats }()
+
+	tmpDir, err := os.MkdirTemp("", "duex-dirsize-boundary")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	subDir := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdir: %v", err)
+	}
+
+	grandchildDir := filepath.Join(subDir, "grandchild")
+	if err := os.Mkdir(grandchildDir, 0755); err != nil {
+		t.Fatalf("Failed to create grandchild: %v", err)
+	}
+
+	file1 := filepath.Join(grandchildDir, "file1.txt")
+	if err := os.WriteFile(file1, []byte("data"), 0644); err != nil {
+		t.Fatalf("Failed to create file1: %v", err)
+	}
+
+	getFileStats = func(info os.FileInfo) fileStats {
+		stats := origGetFileStats(info)
+		if info.Name() == filepath.Base(tmpDir) || info.Name() == "sub" {
+			stats.Dev = 1
+		} else {
+			stats.Dev = 2
+		}
+		return stats
+	}
+
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, true)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	foundSub := false
+	for _, f := range result.Files {
+		if f.Name == "sub" {
+			foundSub = true
+			if f.Size != 0 {
+				t.Errorf("Expected 'sub' size to be 0 (grandchild skipped), got %d", f.Size)
+			}
+		}
+	}
+	if !foundSub {
+		t.Error("Expected to find 'sub'")
 	}
 }
 
