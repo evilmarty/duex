@@ -251,3 +251,87 @@ func TestGetFileStatsFallback(t *testing.T) {
 		t.Error("Expected Multi to be false for nil Sys()")
 	}
 }
+
+func TestAnalyzeWithCache(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "duex-cache-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	subDir := filepath.Join(tmpDir, "cached-subdir")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdir: %v", err)
+	}
+
+	// Put subDir in cache directly
+	cache := map[string]Result{
+		subDir: {
+			TotalSize: 50000,
+			Breakdown: []Breakdown{
+				{Extension: ".dat", Size: 50000},
+			},
+		},
+	}
+
+	// This should hit the cache instead of scanning subDir
+	result, err := Analyze(context.Background(), tmpDir, nil, cache)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	if result.TotalSize != 50000 {
+		t.Errorf("Expected total size 50000 from cache, got %d", result.TotalSize)
+	}
+}
+
+func TestDirSizeWithCache(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "duex-dirsize-cache-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create subDirs
+	parentDir := filepath.Join(tmpDir, "parent")
+	childDir := filepath.Join(parentDir, "child")
+	if err := os.MkdirAll(childDir, 0755); err != nil {
+		t.Fatalf("Failed to create dirs: %v", err)
+	}
+
+	// Put childDir in cache directly
+	cache := map[string]Result{
+		childDir: {
+			TotalSize: 12345,
+			Breakdown: []Breakdown{
+				{Extension: ".log", Size: 12345},
+			},
+		},
+	}
+
+	// Walk parentDir. It should encounter childDir and use cache.
+	size, breakdown := DirSize(context.Background(), parentDir, nil, nil, cache)
+	if size != 12345 {
+		t.Errorf("Expected size 12345 from cache, got %d", size)
+	}
+	if len(breakdown) != 1 || breakdown[0].Extension != ".log" || breakdown[0].Size != 12345 {
+		t.Errorf("Expected log breakdown of size 12345, got %v", breakdown)
+	}
+}
+
+func TestDirSizeCancellation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "duex-dirsize-cancel")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	size, _ := DirSize(ctx, tmpDir, nil, nil, nil)
+	if size != 0 {
+		t.Errorf("Expected 0 size on canceled context, got %d", size)
+	}
+}
+

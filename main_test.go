@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -521,3 +523,224 @@ func TestListFilteringState(t *testing.T) {
 		t.Errorf("expected list component state to be Filtering, got %v", m2.list.FilterState())
 	}
 }
+
+func TestKeyMapHelp(t *testing.T) {
+	k := keys
+	if len(k.ShortHelp()) == 0 {
+		t.Error("Expected short help bindings")
+	}
+	if len(k.FullHelp()) == 0 {
+		t.Error("Expected full help bindings")
+	}
+	if len(k.BrowsingHelp()) == 0 {
+		t.Error("Expected browsing help bindings")
+	}
+	if len(k.ScanningHelp(true)) == 0 {
+		t.Error("Expected scanning help with history")
+	}
+	if len(k.ScanningHelp(false)) == 0 {
+		t.Error("Expected scanning help without history")
+	}
+}
+
+func TestItemMethods(t *testing.T) {
+	fi := analyzer.FileInfo{Name: "myfile.txt", Size: 4096, IsDir: false}
+	it := item{fi}
+
+	if it.Title() != "myfile.txt" {
+		t.Errorf("Title() = %q, want %q", it.Title(), "myfile.txt")
+	}
+	if it.Description() != "4.0 KB" {
+		t.Errorf("Description() = %q, want %q", it.Description(), "4.0 KB")
+	}
+	if it.FilterValue() != "myfile.txt" {
+		t.Errorf("FilterValue() = %q, want %q", it.FilterValue(), "myfile.txt")
+	}
+}
+
+func TestItemDelegateRender(t *testing.T) {
+	fi := analyzer.FileInfo{Name: "nested_folder", Size: 2048, IsDir: true}
+	it := item{fi}
+
+	// Make sure we have a width set in list
+	l := list.New([]list.Item{it}, itemDelegate{}, 100, 20)
+	w := &strings.Builder{}
+	
+	// Test rendering delegate (should not panic)
+	itemDelegate{}.Render(w, l, 0, it)
+	if w.Len() == 0 {
+		t.Error("Expected render output to not be empty")
+	}
+}
+
+func TestUpdateEdgeCases(t *testing.T) {
+	// 1. Loading with no history, press Esc -> nothing should change
+	m := initialModel("/my/test/path")
+	msgEsc := tea.KeyMsg{Type: tea.KeyEsc}
+	newModel1, cmd1 := m.Update(msgEsc)
+	if cmd1 != nil {
+		t.Error("expected no command when escaping without history")
+	}
+	if newModel1.(model).path != "/my/test/path" {
+		t.Error("expected path to remain unchanged")
+	}
+
+	// 2. Browsing state, press Enter with no items or non-directory items
+	m2 := initialModel("/my/test/path")
+	m2.loading = false
+	// selection is nil initially
+	msgEnter := tea.KeyMsg{Type: tea.KeyEnter}
+	_, cmd2 := m2.Update(msgEnter)
+	if cmd2 != nil {
+		t.Error("expected no command when pressing Enter on empty list")
+	}
+
+	// item is a file (non-directory)
+	m2.setItems(analyzer.Result{
+		Files: []analyzer.FileInfo{
+			{Name: "file.txt", Size: 100, IsDir: false},
+		},
+		TotalSize: 100,
+	})
+	m2.list.Select(1) // select "file.txt" (index 1 since "." is 0)
+	_, cmd3 := m2.Update(msgEnter)
+	if cmd3 != nil {
+		t.Error("expected no command when pressing Enter on a file")
+	}
+
+	// selection is "."
+	m2.list.Select(0) // select "."
+	_, cmd4 := m2.Update(msgEnter)
+	if cmd4 != nil {
+		t.Error("expected no command when pressing Enter on '.'")
+	}
+
+	// 3. Browsing state, press Backspace when path is root (parent == path)
+	m5 := initialModel("/")
+	m5.loading = false
+	msgBack := tea.KeyMsg{Type: tea.KeyBackspace}
+	_, cmd5 := m5.Update(msgBack)
+	if cmd5 != nil {
+		t.Error("expected no command when navigating back from root")
+	}
+
+	// 4. progressMsg when not loading
+	m6 := initialModel("/my/test/path")
+	m6.loading = false
+	_, cmd6 := m6.Update(progressMsg("/my/test/path/foo"))
+	if cmd6 != nil {
+		t.Error("expected progressMsg to be ignored when not loading")
+	}
+
+	// 5. analyzeMsg with non-matching path
+	m7 := initialModel("/my/test/path")
+	newModel7, cmd7 := m7.Update(analyzeMsg{path: "/different/path", result: analyzer.Result{}})
+	// Should not turn off loading since paths don't match
+	if !newModel7.(model).loading {
+		t.Error("expected loading to remain true when path doesn't match")
+	}
+	if cmd7 != nil {
+		t.Error("expected no command when paths don't match")
+	}
+
+	// 6. Unknown key in browsing state
+	m8 := initialModel("/my/test/path")
+	m8.loading = false
+	msgUnk := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
+	_, _ = m8.Update(msgUnk)
+}
+
+func TestShowHelpAndMain(t *testing.T) {
+	// Call showHelp (which prints to stdout) to cover statements
+	showHelp()
+
+	// Backup os.Args and restore it
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	// Test main() with -h / --help
+	os.Args = []string{"duex", "-h"}
+	main()
+
+	// Test main() with -v / --version
+	os.Args = []string{"duex", "-v"}
+	main()
+}
+
+func TestStartScanAndProgressCommands(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "duex-cmd-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	m := initialModel(tmpDir)
+	m.progressChan = make(chan string, 10)
+
+	// Call startScan to get the tea.Cmd
+	cmd := m.startScan(tmpDir)
+	if cmd == nil {
+		t.Fatal("expected startScan to return a command")
+	}
+
+	// Execute startScan command synchronously
+	msg := cmd()
+	if _, ok := msg.(analyzeMsg); !ok {
+		t.Errorf("expected analyzeMsg from startScan command, got %T", msg)
+	}
+
+	// Send progress path
+	m.progressChan <- "somepath"
+	
+	// Call waitForProgress to get command
+	progressCmd := m.waitForProgress(m.progressChan)
+	progressMsgVal := progressCmd()
+	if progressMsgVal.(progressMsg) != "somepath" {
+		t.Errorf("expected progressMsg 'somepath', got %v", progressMsgVal)
+	}
+
+	// Close progress channel to cover !ok branch
+	close(m.progressChan)
+	nilProgressMsg := progressCmd()
+	if nilProgressMsg != nil {
+		t.Errorf("expected nil progressMsg when channel is closed, got %v", nilProgressMsg)
+	}
+
+	// Test startScan error path
+	cmdErr := m.startScan("/non/existent/path")
+	msgErr := cmdErr()
+	if _, ok := msgErr.(error); !ok {
+		t.Errorf("expected error from startScan command on non-existent path, got %T", msgErr)
+	}
+}
+
+func TestMainUnknownFlag(t *testing.T) {
+	if os.Getenv("BE_CRASHER") == "1" {
+		os.Args = []string{"duex", "-unknown"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestMainUnknownFlag")
+	cmd.Env = append(os.Environ(), "BE_CRASHER=1")
+	err := cmd.Run()
+	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
+		return
+	}
+	t.Fatalf("process ran with err %v, want exit status 1", err)
+}
+
+func TestMainTooManyArgs(t *testing.T) {
+	if os.Getenv("BE_CRASHER") == "2" {
+		os.Args = []string{"duex", "path1", "path2"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestMainTooManyArgs")
+	cmd.Env = append(os.Environ(), "BE_CRASHER=2")
+	err := cmd.Run()
+	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
+		return
+	}
+	t.Fatalf("process ran with err %v, want exit status 1", err)
+}
+
