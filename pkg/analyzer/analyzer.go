@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Breakdown represents a breakdown of file sizes by extension.
@@ -18,22 +19,25 @@ type Breakdown struct {
 
 // FileInfo represents information about a file or directory.
 type FileInfo struct {
-	Name      string
-	Path      string
-	Size      int64
-	IsDir     bool
-	Breakdown []Breakdown
+	Name         string
+	Path         string
+	Size         int64
+	IsDir        bool
+	Breakdown    []Breakdown
+	IsUnreadable bool  // Set to true if this file/directory could not be read
+	ErrorsCount  int64 // Number of unreadable items inside this directory
 }
 
 // Result contains the analysis results for a directory.
 type Result struct {
-	Files     []FileInfo
-	TotalSize int64
-	Breakdown []Breakdown
+	Files       []FileInfo
+	TotalSize   int64
+	Breakdown   []Breakdown
+	ErrorsCount int64
 }
 
 // Analyze scans the given path and returns the size of each entry and the total size.
-func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result, oneFileSystem bool) (Result, error) {
+func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result, oneFileSystem bool, errorsCount *int64) (Result, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return Result{}, err
@@ -61,6 +65,17 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 		sendProgress(progress, path)
 		info, err := entry.Info()
 		if err != nil {
+			if errorsCount != nil {
+				atomic.AddInt64(errorsCount, 1)
+			}
+			result.ErrorsCount++
+			result.Files = append(result.Files, FileInfo{
+				Name:         entry.Name(),
+				Path:         path,
+				Size:         0,
+				IsDir:        entry.IsDir(),
+				IsUnreadable: true,
+			})
 			continue
 		}
 
@@ -74,13 +89,16 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			if cached, ok := cache[path]; ok {
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
-					Name:      entry.Name(),
-					Path:      path,
-					Size:      cached.TotalSize,
-					IsDir:     true,
-					Breakdown: cached.Breakdown,
+					Name:         entry.Name(),
+					Path:         path,
+					Size:         cached.TotalSize,
+					IsDir:        true,
+					Breakdown:    cached.Breakdown,
+					IsUnreadable: cached.TotalSize == 0 && cached.ErrorsCount > 0,
+					ErrorsCount:  cached.ErrorsCount,
 				})
 				result.TotalSize += cached.TotalSize
+				result.ErrorsCount += cached.ErrorsCount
 				mu.Unlock()
 				continue
 			}
@@ -88,16 +106,19 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev)
+				size, breakdown, errs := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
-					Name:      n,
-					Path:      p,
-					Size:      size,
-					IsDir:     true,
-					Breakdown: breakdown,
+					Name:         n,
+					Path:         p,
+					Size:         size,
+					IsDir:        true,
+					Breakdown:    breakdown,
+					IsUnreadable: size == 0 && errs > 0,
+					ErrorsCount:  errs,
 				})
 				result.TotalSize += size
+				result.ErrorsCount += errs
 				mu.Unlock()
 			}(path, entry.Name())
 		} else {
@@ -141,12 +162,17 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 }
 
 // DirSize calculates the total size of a directory recursively and its breakdown.
-func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64) (int64, []Breakdown) {
+func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64) (int64, []Breakdown, int64) {
 	var size int64
+	var errs int64
 	extensions := make(map[string]int64)
 
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			errs++
+			if errorsCount != nil {
+				atomic.AddInt64(errorsCount, 1)
+			}
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -158,6 +184,10 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 			if oneFileSystem && p != path {
 				info, err := d.Info()
 				if err != nil {
+					errs++
+					if errorsCount != nil {
+						atomic.AddInt64(errorsCount, 1)
+					}
 					return filepath.SkipDir
 				}
 				dirStats := getFileStats(info)
@@ -169,6 +199,10 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 			if p != path {
 				if cached, ok := cache[p]; ok {
 					size += cached.TotalSize
+					errs += cached.ErrorsCount
+					if errorsCount != nil {
+						atomic.AddInt64(errorsCount, cached.ErrorsCount)
+					}
 					for _, b := range cached.Breakdown {
 						extensions[b.Extension] += b.Size
 					}
@@ -190,6 +224,11 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 					ext = strings.ToLower(ext)
 				}
 				extensions[ext] += s
+			} else {
+				errs++
+				if errorsCount != nil {
+					atomic.AddInt64(errorsCount, 1)
+				}
 			}
 		}
 		return nil
@@ -204,7 +243,7 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 		return breakdown[i].Size > breakdown[j].Size
 	})
 
-	return size, breakdown
+	return size, breakdown, errs
 }
 
 func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {

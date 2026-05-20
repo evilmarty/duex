@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"duex/pkg/analyzer"
 
@@ -123,7 +124,15 @@ var keys = keyMap{
 }
 
 func (i item) Title() string       { return i.Name }
-func (i item) Description() string { return formatSize(i.Size) }
+func (i item) Description() string {
+	if i.IsUnreadable {
+		return "⚠️"
+	}
+	if i.IsDir && i.ErrorsCount > 0 {
+		return "⚠️ " + formatSize(i.Size)
+	}
+	return formatSize(i.Size)
+}
 func (i item) FilterValue() string { return i.Name }
 
 type itemDelegate struct{}
@@ -150,15 +159,37 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 
 	sizeStr := formatSize(i.Size)
+	sizeLen := len(sizeStr)
+	// Build the size style: when selected, size should also be bold.
+	effectiveSizeStyle := sizeStyle
+	if index == m.Index() {
+		effectiveSizeStyle = sizeStyle.Bold(true)
+	}
+
+	var sizeRendered string
+	if i.IsUnreadable {
+		sizeStr = "⚠️ "
+		sizeLen = 3
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D1A100")).Bold(true)
+		sizeRendered = warnStyle.Render("⚠️ ")
+	} else if i.IsDir && i.ErrorsCount > 0 {
+		sizeStr = "⚠️ " + sizeStr
+		sizeLen = 3 + len(formatSize(i.Size))
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D1A100")).Bold(true)
+		sizeRendered = warnStyle.Render("⚠️ ") + effectiveSizeStyle.Render(formatSize(i.Size))
+	} else {
+		sizeRendered = effectiveSizeStyle.Render(sizeStr)
+	}
+
 	// Calculate dynamic width. Subtract cursor(2), size padding(2), and size length.
 	// Ensure we have a minimum width for the name.
-	nameWidth := m.Width() - len(sizeStr) - 5
+	nameWidth := m.Width() - sizeLen - 5
 	if nameWidth < 10 {
 		nameWidth = 10
 	}
 
-	line := fmt.Sprintf("%s %-*s %s", cursor, nameWidth, truncate(str, nameWidth), sizeStyle.Render(sizeStr))
-	fmt.Fprint(w, style.Render(line))
+	namePart := fmt.Sprintf("%s %-*s", cursor, nameWidth, truncate(str, nameWidth))
+	fmt.Fprint(w, style.Render(namePart)+" "+sizeRendered)
 }
 
 type model struct {
@@ -177,6 +208,8 @@ type model struct {
 	history       []string
 	help          help.Model
 	oneFileSystem bool
+	errorsCount   int64 // Track permission/access errors in currently viewed path
+	errorsPtr     *int64 // Pointer to the errors count passed to the analyzer
 }
 
 type analyzeMsg struct {
@@ -208,6 +241,7 @@ func initialModel(path string) model {
 		list:          l,
 		help:          help.New(),
 		oneFileSystem: true,
+		errorsPtr:     new(int64),
 	}
 }
 
@@ -226,9 +260,14 @@ func (m *model) startScan(targetPath string) tea.Cmd {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
+	if m.errorsPtr == nil {
+		m.errorsPtr = new(int64)
+	} else {
+		atomic.StoreInt64(m.errorsPtr, 0)
+	}
 
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache, m.oneFileSystem)
+		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache, m.oneFileSystem, m.errorsPtr)
 		if err != nil {
 			return err
 		}
@@ -406,6 +445,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) setItems(res analyzer.Result) {
+	m.errorsCount = res.ErrorsCount
 	files := res.Files
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Size > files[j].Size
@@ -416,11 +456,12 @@ func (m *model) setItems(res analyzer.Result) {
 	// Inject current directory item if we have data
 	if res.TotalSize > 0 || len(res.Breakdown) > 0 {
 		items = append(items, item{analyzer.FileInfo{
-			Name:      ".",
-			Path:      m.path,
-			Size:      res.TotalSize,
-			IsDir:     true,
-			Breakdown: res.Breakdown,
+			Name:        ".",
+			Path:        m.path,
+			Size:        res.TotalSize,
+			IsDir:       true,
+			Breakdown:   res.Breakdown,
+			ErrorsCount: res.ErrorsCount,
 		}})
 	}
 
@@ -445,6 +486,14 @@ func (m model) View() string {
 		s.WriteString(fmt.Sprintf("%s Scanning directory...\n\n", m.spinner.View()))
 		for _, p := range m.scannedPaths {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
+		}
+
+		errs := atomic.LoadInt64(m.errorsPtr)
+		if errs > 0 {
+			warningStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#D1A100")).
+				Bold(true)
+			s.WriteString("\n" + warningStyle.Render(fmt.Sprintf("⚠️  Warning: %d directories/files skipped so far.", errs)) + "\n")
 		}
 
 		helpView := "\n" + m.help.ShortHelpView(keys.ScanningHelp(len(m.history) > 0))
@@ -485,8 +534,16 @@ func (m model) View() string {
 			detailStyle.Height(m.list.Height()+2).Render(rightPane.String()),
 		)
 
+		var warningView string
+		if m.errorsCount > 0 {
+			warningStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#D1A100")).
+				Bold(true)
+			warningView = "\n" + warningStyle.Render(fmt.Sprintf("⚠️  Warning: %d files/directories were skipped due to permission errors.", m.errorsCount))
+		}
+
 		helpView := "\n" + m.help.ShortHelpView(keys.BrowsingHelp())
-		content = mainContent + helpView
+		content = mainContent + warningView + helpView
 	}
 
 	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, content))

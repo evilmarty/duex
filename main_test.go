@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"duex/pkg/analyzer"
@@ -436,6 +437,17 @@ func TestViewRenderingOutputs(t *testing.T) {
 		t.Errorf("expected scanned paths to render, got:\n%s", viewStrLoading)
 	}
 
+	// 2b. Loading state rendering with real-time warnings
+	m2b := initialModel("/my/test/path")
+	m2b.width = 80
+	m2b.height = 24
+	m2b.scannedPaths = []string{"/my/test/path/dir1"}
+	atomic.StoreInt64(m2b.errorsPtr, 3)
+	viewStrLoadingWarn := stripAnsi(m2b.View())
+	if !strings.Contains(viewStrLoadingWarn, "Warning: 3 directories/files skipped so far.") {
+		t.Errorf("expected view to indicate 3 skipped directories/files, got:\n%s", viewStrLoadingWarn)
+	}
+
 	// 3. Browsing state rendering
 	m3 := initialModel("/my/test/path")
 	m3.width = 100
@@ -496,6 +508,24 @@ func TestViewRenderingOutputs(t *testing.T) {
 	}
 	if !strings.Contains(viewStrDirSelected, "  txt        8.8 KB") {
 		t.Errorf("expected file breakdown items to render, got:\n%s", viewStrDirSelected)
+	}
+
+	// 5. Warning state rendering
+	m5 := initialModel("/my/test/path")
+	m5.width = 100
+	m5.height = 30
+	m5.loading = false
+	mockResultErr := analyzer.Result{
+		Files: []analyzer.FileInfo{
+			{Name: "data.csv", Size: 4096, IsDir: false},
+		},
+		TotalSize:   4096,
+		ErrorsCount: 5,
+	}
+	m5.setItems(mockResultErr)
+	viewStrWarn := stripAnsi(m5.View())
+	if !strings.Contains(viewStrWarn, "Warning: 5 files/directories were skipped") {
+		t.Errorf("expected warning view to contain permission error notification, got:\n%s", viewStrWarn)
 	}
 }
 
@@ -571,6 +601,36 @@ func TestItemDelegateRender(t *testing.T) {
 	itemDelegate{}.Render(w, l, 0, it)
 	if w.Len() == 0 {
 		t.Error("Expected render output to not be empty")
+	}
+
+	// Test unreadable item
+	fiUnreadable := analyzer.FileInfo{Name: "locked_folder", Size: 0, IsDir: true, IsUnreadable: true}
+	itUnreadable := item{fiUnreadable}
+	if itUnreadable.Description() != "⚠️" {
+		t.Errorf("Expected description to be ⚠️, got %q", itUnreadable.Description())
+	}
+
+	wUnreadable := &strings.Builder{}
+	itemDelegate{}.Render(wUnreadable, l, 0, itUnreadable)
+	if !strings.Contains(wUnreadable.String(), "⚠️") {
+		t.Errorf("Expected render output for unreadable item to contain ⚠️, got: %s", wUnreadable.String())
+	}
+
+	// Test directory with partial errors (contains unreadable children but itself is readable)
+	fiPartial := analyzer.FileInfo{Name: "partial_folder", Size: 4096, IsDir: true, ErrorsCount: 2}
+	itPartial := item{fiPartial}
+	desc := itPartial.Description()
+	if !strings.Contains(desc, "⚠️") {
+		t.Errorf("Expected description for partial-error dir to contain ⚠️, got %q", desc)
+	}
+	if !strings.Contains(desc, "4.0 KB") {
+		t.Errorf("Expected description for partial-error dir to contain size, got %q", desc)
+	}
+
+	wPartial := &strings.Builder{}
+	itemDelegate{}.Render(wPartial, l, 0, itPartial)
+	if !strings.Contains(wPartial.String(), "⚠️") {
+		t.Errorf("Expected render output for partial-error dir to contain ⚠️, got: %s", wPartial.String())
 	}
 }
 
