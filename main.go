@@ -533,15 +533,41 @@ func showHelp() {
 }
 
 func showHelpWriter(w io.Writer) {
-	fmt.Fprintln(w, "duex - Disk Usage Explorer")
-	fmt.Fprintln(w, "\nUsage:")
-	fmt.Fprintln(w, "  duex [path] [flags]")
-	fmt.Fprintln(w, "\nFlags:")
-	fmt.Fprintln(w, "  -h, --help            Show this help message")
-	fmt.Fprintln(w, "  -v, --version         Show application version")
-	fmt.Fprintln(w, "  -c, --cross-mounts    Allow crossing filesystem boundaries")
-	fmt.Fprintln(w, "\nArguments:")
-	fmt.Fprintln(w, "  path                  The directory to scan (defaults to current directory)")
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#7D56F4")).
+		Padding(0, 1)
+
+	sectionStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4"))
+
+	flagStyle := lipgloss.NewStyle()
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888"))
+
+	printLine := func(name, desc string) {
+		padding := 20 - len(name)
+		if padding < 0 {
+			padding = 0
+		}
+		fmt.Fprintf(w, "  %s%s %s\n", flagStyle.Render(name), strings.Repeat(" ", padding), descStyle.Render(desc))
+	}
+
+	fmt.Fprintln(w, headerStyle.Render("duex - Disk Usage Explorer"))
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, sectionStyle.Render("Usage:"))
+	fmt.Fprintln(w, "  duex [flags] [path]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, sectionStyle.Render("Flags:"))
+	printLine("-h, --help", "Show this help message")
+	printLine("-v, --version", "Show application version")
+	printLine("-c, --cross-mounts", "Allow crossing filesystem boundaries")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, sectionStyle.Render("Arguments:"))
+	printLine("path", "The directory to scan (defaults to current directory)")
 }
 
 func parseFlags(output io.Writer, args []string) (path string, oneFileSystem bool, showHelp bool, showVersion bool, err error) {
