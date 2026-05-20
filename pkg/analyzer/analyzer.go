@@ -2,9 +2,9 @@ package analyzer
 
 import (
 	"context"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -162,88 +162,131 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 }
 
 // DirSize calculates the total size of a directory recursively and its breakdown.
+// It uses a bounded goroutine worker pool: one goroutine is launched per subdirectory,
+// but at most runtime.NumCPU() goroutines perform filesystem I/O concurrently via a
+// semaphore. This eliminates the sequential bottleneck of filepath.WalkDir while
+// preventing resource exhaustion on deep or wide directory trees.
 func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64) (int64, []Breakdown, int64) {
-	var size int64
-	var errs int64
-	extensions := make(map[string]int64)
+	var (
+		totalSize  int64
+		totalErrs  int64
+		extMu      sync.Mutex
+		extensions = make(map[string]int64)
+		wg         sync.WaitGroup
+	)
 
-	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+	// sem is a counting semaphore that limits concurrent filesystem I/O to
+	// runtime.NumCPU() goroutines. Goroutines waiting to acquire a slot are
+	// parked by the scheduler and consume minimal resources, so spawning one
+	// goroutine per subdirectory is safe even for very large trees.
+	sem := make(chan struct{}, runtime.NumCPU())
+
+	var processDir func(dirPath string)
+	processDir = func(dirPath string) {
+		defer wg.Done()
+
+		// Block here until a semaphore slot is available. This is the only
+		// point at which a goroutine waits to acquire a resource it does not
+		// already hold, so no deadlock is possible.
+		sem <- struct{}{}
+		defer func() { <-sem }()
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		// For non-root directories check the cache to avoid redundant traversal.
+		if dirPath != path {
+			if cached, ok := cache[dirPath]; ok {
+				atomic.AddInt64(&totalSize, cached.TotalSize)
+				atomic.AddInt64(&totalErrs, cached.ErrorsCount)
+				if errorsCount != nil {
+					atomic.AddInt64(errorsCount, cached.ErrorsCount)
+				}
+				extMu.Lock()
+				for _, b := range cached.Breakdown {
+					extensions[b.Extension] += b.Size
+				}
+				extMu.Unlock()
+				return
+			}
+		}
+
+		sendProgress(progress, dirPath)
+
+		entries, err := os.ReadDir(dirPath)
 		if err != nil {
-			errs++
+			atomic.AddInt64(&totalErrs, 1)
 			if errorsCount != nil {
 				atomic.AddInt64(errorsCount, 1)
 			}
-			return nil
+			return
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		sendProgress(progress, p)
 
-		if d.IsDir() {
-			if oneFileSystem && p != path {
-				info, err := d.Info()
+		for _, entry := range entries {
+			if ctx.Err() != nil {
+				return
+			}
+
+			entryPath := filepath.Join(dirPath, entry.Name())
+
+			if entry.IsDir() {
+				if oneFileSystem {
+					info, err := entry.Info()
+					if err != nil {
+						atomic.AddInt64(&totalErrs, 1)
+						if errorsCount != nil {
+							atomic.AddInt64(errorsCount, 1)
+						}
+						continue
+					}
+					if getFileStats(info).Dev != rootDev {
+						continue
+					}
+				}
+				// Launch a goroutine per subdirectory. It will wait for a semaphore
+				// slot before doing any I/O, so the parent is never blocked here.
+				wg.Add(1)
+				go processDir(entryPath)
+			} else {
+				sendProgress(progress, entryPath)
+				info, err := entry.Info()
 				if err != nil {
-					errs++
+					atomic.AddInt64(&totalErrs, 1)
 					if errorsCount != nil {
 						atomic.AddInt64(errorsCount, 1)
 					}
-					return filepath.SkipDir
+					continue
 				}
-				dirStats := getFileStats(info)
-				if dirStats.Dev != rootDev {
-					return filepath.SkipDir
-				}
-			}
-
-			if p != path {
-				if cached, ok := cache[p]; ok {
-					size += cached.TotalSize
-					errs += cached.ErrorsCount
-					if errorsCount != nil {
-						atomic.AddInt64(errorsCount, cached.ErrorsCount)
-					}
-					for _, b := range cached.Breakdown {
-						extensions[b.Extension] += b.Size
-					}
-					return filepath.SkipDir
-				}
-			}
-		}
-
-		if !d.IsDir() {
-			info, err := d.Info()
-			if err == nil {
 				s := getPhysicalSize(info, seen)
-				size += s
+				atomic.AddInt64(&totalSize, s)
 
-				ext := filepath.Ext(d.Name())
+				ext := filepath.Ext(entry.Name())
 				if ext == "" || len(ext) > 15 {
 					ext = "Other"
 				} else {
 					ext = strings.ToLower(ext)
 				}
+				extMu.Lock()
 				extensions[ext] += s
-			} else {
-				errs++
-				if errorsCount != nil {
-					atomic.AddInt64(errorsCount, 1)
-				}
+				extMu.Unlock()
 			}
 		}
-		return nil
-	})
+	}
+
+	wg.Add(1)
+	go processDir(path)
+	wg.Wait()
 
 	var breakdown []Breakdown
 	for ext, s := range extensions {
 		breakdown = append(breakdown, Breakdown{Extension: ext, Size: s})
 	}
-
 	sort.Slice(breakdown, func(i, j int) bool {
 		return breakdown[i].Size > breakdown[j].Size
 	})
 
-	return size, breakdown, errs
+	return totalSize, breakdown, totalErrs
 }
 
 func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {

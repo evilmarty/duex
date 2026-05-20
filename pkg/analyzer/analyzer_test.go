@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -649,49 +650,32 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 		t.Errorf("Expected errs2 to be at least 1, got %d", res2.errs)
 	}
 
-	// 3. d.Info() failure for file inside DirSize
+	// 3. os.ReadDir failure: subdirectory with 0000 permissions cannot be read by DirSize.
+	// With the new concurrent worker pool, errors are triggered by os.ReadDir failing on
+	// the locked subdirectory, not by mid-walk stat failures.
 	tmpDir3, err := os.MkdirTemp("", "duex-edge3")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer func() {
-		os.Chmod(tmpDir3, 0755)
-		os.RemoveAll(tmpDir3)
-	}()
+	defer os.RemoveAll(tmpDir3)
 
-	// Create 50 files
-	for i := 0; i < 50; i++ {
-		filePath := filepath.Join(tmpDir3, fmt.Sprintf("file%d.txt", i))
-		os.WriteFile(filePath, []byte("data"), 0644)
+	lockedSub3 := filepath.Join(tmpDir3, "locked")
+	if err := os.Mkdir(lockedSub3, 0000); err != nil {
+		t.Fatalf("Failed to create locked subdir: %v", err)
 	}
+	defer os.Chmod(lockedSub3, 0755)
 
-	progress3 := make(chan string, 100)
+	// Also place a readable file alongside so TotalSize > 0.
+	os.WriteFile(filepath.Join(tmpDir3, "file.txt"), []byte("data"), 0644)
+
 	var errorsCount3 int64
-	ch3 := make(chan dirSizeResult, 1)
-
-	go func() {
-		size, breakdown, errs := DirSize(context.Background(), tmpDir3, progress3, nil, nil, false, 0, &errorsCount3)
-		close(progress3)
-		ch3 <- dirSizeResult{size, breakdown, errs}
-	}()
-
-	first3 := true
-	for p := range progress3 {
-		t.Logf("[Test 3] Received progress path: %s", p)
-		if first3 {
-			err := os.Chmod(tmpDir3, 0000)
-			t.Logf("[Test 3] os.Chmod(0000) error: %v", err)
-			first3 = false
-		}
-	}
-	res3 := <-ch3
-	os.Chmod(tmpDir3, 0755)
+	_, _, errs3 := DirSize(context.Background(), tmpDir3, nil, nil, nil, false, 0, &errorsCount3)
 
 	if errorsCount3 < 1 {
-		t.Errorf("Expected at least 1 error count for unreadable file in DirSize, got %d", errorsCount3)
+		t.Errorf("Expected at least 1 error count for unreadable subdirectory in DirSize, got %d", errorsCount3)
 	}
-	if res3.errs < 1 {
-		t.Errorf("Expected errs3 to be at least 1, got %d", res3.errs)
+	if errs3 < 1 {
+		t.Errorf("Expected errs3 to be at least 1, got %d", errs3)
 	}
 
 	// 4. Cache hit with errors count in DirSize
@@ -726,5 +710,106 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 	}
 }
 
+// TestDirSizeConcurrentDeep verifies that the bounded goroutine worker pool
+// produces correct results on a 3-level-deep directory tree, exercising
+// the concurrent path at every depth level.
+func TestDirSizeConcurrentDeep(t *testing.T) {
+	root, err := os.MkdirTemp("", "duex-concurrent-deep")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(root)
 
+	// Build a 3-level tree:
+	//   root/
+	//     a/
+	//       aa/  (file_aa.txt)
+	//       ab/  (file_ab.txt)
+	//       file_a.txt
+	//     b/
+	//       ba/  (file_ba.txt)
+	//       file_b.txt
+	//     file_root.txt
+	const fileContent = "duextest" // 8 bytes logical
+	mkdirAll := func(path string) {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	writeFile := func(path string) {
+		if err := os.WriteFile(path, []byte(fileContent), 0644); err != nil {
+			t.Fatalf("writefile %s: %v", path, err)
+		}
+	}
 
+	mkdirAll(filepath.Join(root, "a", "aa"))
+	mkdirAll(filepath.Join(root, "a", "ab"))
+	mkdirAll(filepath.Join(root, "b", "ba"))
+
+	writeFile(filepath.Join(root, "file_root.txt"))
+	writeFile(filepath.Join(root, "a", "file_a.txt"))
+	writeFile(filepath.Join(root, "a", "aa", "file_aa.txt"))
+	writeFile(filepath.Join(root, "a", "ab", "file_ab.txt"))
+	writeFile(filepath.Join(root, "b", "file_b.txt"))
+	writeFile(filepath.Join(root, "b", "ba", "file_ba.txt"))
+
+	progress := make(chan string, 256)
+	var seen sync.Map
+	size, breakdown, errs := DirSize(context.Background(), root, progress, &seen, nil, false, 0, nil)
+
+	if errs != 0 {
+		t.Errorf("expected 0 errors, got %d", errs)
+	}
+	if size <= 0 {
+		t.Errorf("expected positive total size, got %d", size)
+	}
+	if len(breakdown) == 0 {
+		t.Error("expected non-empty breakdown")
+	}
+
+	// All 6 files should have contributed to the breakdown.
+	var totalBreakdown int64
+	for _, b := range breakdown {
+		totalBreakdown += b.Size
+	}
+	if totalBreakdown != size {
+		t.Errorf("breakdown total %d != DirSize total %d", totalBreakdown, size)
+	}
+
+	// At least some progress messages should have been emitted.
+	if len(progress) == 0 {
+		t.Error("expected at least one progress message")
+	}
+}
+
+// BenchmarkDirSize measures the throughput of the concurrent worker pool on a
+// moderately wide and deep temp directory. Run with:
+//
+//	go test -bench=BenchmarkDirSize -benchmem ./pkg/analyzer/
+func BenchmarkDirSize(b *testing.B) {
+	root, err := os.MkdirTemp("", "duex-bench")
+	if err != nil {
+		b.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(root)
+
+	// Create 10 subdirectories each containing 100 files.
+	for i := 0; i < 10; i++ {
+		dir := filepath.Join(root, fmt.Sprintf("dir%d", i))
+		if err := os.Mkdir(dir, 0755); err != nil {
+			b.Fatalf("mkdir: %v", err)
+		}
+		for j := 0; j < 100; j++ {
+			p := filepath.Join(dir, fmt.Sprintf("file%d.txt", j))
+			if err := os.WriteFile(p, []byte("bench"), 0644); err != nil {
+				b.Fatalf("writefile: %v", err)
+			}
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var seen sync.Map
+		DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
+	}
+}
