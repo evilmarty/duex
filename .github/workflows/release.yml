@@ -50,9 +50,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
 
-      - uses: mislav/bump-homebrew-formula-action@v3
+      - uses: mislav/bump-homebrew-formula-action@v4
         with:
-          formula-name: ilc
+          formula-name: duex
           formula-path: Formula/duex.rb
           homebrew-tap: evilmarty/homebrew-duex
           base-branch: main
