@@ -466,8 +466,10 @@ func TestViewRenderingOutputs(t *testing.T) {
 	m3.list.Select(1) // select data.csv (index 1 since "." is 0)
 
 	viewStrBrowsing := stripAnsi(m3.View())
-	if !strings.Contains(viewStrBrowsing, "Path: /my/test/path") {
-		t.Errorf("expected path header to render, got:\n%s", viewStrBrowsing)
+	// The breadcrumb replaces the old "Path: ..." line; the final segment of
+	// the path (/my/test/path) is "path", which should appear in the output.
+	if !strings.Contains(viewStrBrowsing, "path") {
+		t.Errorf("expected breadcrumb to render current dir segment, got:\n%s", viewStrBrowsing)
 	}
 	if !strings.Contains(viewStrBrowsing, "data.csv") {
 		t.Errorf("expected scanned files in list, got:\n%s", viewStrBrowsing)
@@ -931,4 +933,107 @@ func TestMainTooManyArgs(t *testing.T) {
 	}
 	t.Fatalf("process ran with err %v, want exit status 1", err)
 }
+
+func TestRenderBreadcrumb(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	tests := []struct {
+		name     string
+		path     string
+		width    int
+		wantSegs []string // substrings that must appear in plain-text output
+		wantNot  []string // substrings that must NOT appear
+	}{
+		{
+			name:     "home directory collapsed to tilde",
+			path:     home,
+			width:    80,
+			wantSegs: []string{"~"},
+		},
+		{
+			name:     "path under home uses tilde prefix",
+			path:     home + "/Code/duex",
+			width:    80,
+			wantSegs: []string{"~", "Code", "duex"},
+		},
+		{
+			name:     "root path renders as slash segment",
+			path:     "/",
+			width:    80,
+			wantSegs: []string{"/"},
+		},
+		{
+			name:     "absolute path outside home shows all segments",
+			path:     "/usr/local/bin",
+			width:    80,
+			wantSegs: []string{"usr", "local", "bin"},
+		},
+		{
+			name:     "narrow width truncates from the left with ellipsis",
+			path:     "/very/deeply/nested/directory/structure/here",
+			width:    10,
+			wantSegs: []string{"here"},
+			wantNot:  []string{"very"},
+		},
+		{
+			name:  "final segment always present regardless of width",
+			path:  "/a/b/c/d/e/f/g",
+			width: 1,
+			// The loop never drops the last segment; even at width=1 'g' will appear
+			// (possibly prefixed by '… / ').
+			wantSegs: []string{"g"},
+		},
+		{
+			name:     "separator appears between segments",
+			path:     "/foo/bar/baz",
+			width:    80,
+			wantSegs: []string{"foo", "/", "bar", "/", "baz"},
+		},
+		{
+			name:     "single segment path renders correctly",
+			path:     "/singledir",
+			width:    80,
+			wantSegs: []string{"singledir"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := renderBreadcrumb(tc.path, tc.width)
+			plain := stripANSI(result)
+
+			for _, want := range tc.wantSegs {
+				if !strings.Contains(plain, want) {
+					t.Errorf("renderBreadcrumb(%q, %d) = %q; want substring %q", tc.path, tc.width, plain, want)
+				}
+			}
+			for _, bad := range tc.wantNot {
+				if strings.Contains(plain, bad) {
+					t.Errorf("renderBreadcrumb(%q, %d) = %q; must NOT contain %q", tc.path, tc.width, plain, bad)
+				}
+			}
+		})
+	}
+}
+
+// stripANSI removes ANSI escape sequences from s for plain-text comparison.
+func stripANSI(s string) string {
+	var out strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
 

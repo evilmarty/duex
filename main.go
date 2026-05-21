@@ -49,6 +49,11 @@ var (
 
 	containerStyle = lipgloss.NewStyle().
 			Padding(0, 2)
+
+	// Breadcrumb styles
+	crumbStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C"))
+	crumbSep      = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C")).Render(" / ")
+	crumbActive   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Bold(true)
 )
 
 type item struct {
@@ -500,8 +505,12 @@ func (m model) View() string {
 		content = s.String() + helpView
 	} else {
 
+		leftWidth := m.width - 40 - 6
+		if leftWidth < 20 {
+			leftWidth = 20
+		}
 		var leftPane strings.Builder
-		leftPane.WriteString(fmt.Sprintf("Path: %s\n\n", m.path))
+		leftPane.WriteString(renderBreadcrumb(m.path, leftWidth) + "\n\n")
 		leftPane.WriteString(m.list.View())
 
 		var rightPane strings.Builder
@@ -558,6 +567,76 @@ func truncate(s string, max int) string {
 	}
 	return s
 }
+
+// renderBreadcrumb renders m.path as a styled breadcrumb trail that fits within
+// width columns of plain-text. The home directory prefix is replaced with ~.
+// Non-current segments are muted; the current (final) segment is bold purple.
+// When the trail is too wide, leftmost segments are replaced with a … token.
+func renderBreadcrumb(path string, width int) string {
+	// Collapse home directory.
+	if home, err := os.UserHomeDir(); err == nil {
+		if strings.HasPrefix(path, home) {
+			path = "~" + path[len(home):]
+		}
+	}
+
+	// Split into segments, filtering empty strings caused by leading separator.
+	raw := strings.Split(path, string(filepath.Separator))
+	var segments []string
+	for _, s := range raw {
+		if s != "" {
+			segments = append(segments, s)
+		}
+	}
+	// Root "/" produces no segments after filtering; represent it as "/".
+	if len(segments) == 0 {
+		segments = []string{"/"}
+	}
+
+	// Separator costs 3 plain-text chars (" / ").
+	const sepLen = 3
+
+	// Measure total plain-text width of all segments joined.
+	totalLen := func(segs []string) int {
+		n := 0
+		for i, s := range segs {
+			n += len(s)
+			if i < len(segs)-1 {
+				n += sepLen
+			}
+		}
+		return n
+	}
+
+	// Left-truncate: while the total plain-text width exceeds the available space,
+	// drop the oldest data segment. Once we've started truncating, ensure the
+	// ellipsis placeholder sits at position 0 (added once, never duplicated).
+	for len(segments) > 1 && totalLen(segments) > width {
+		if segments[0] == "…" {
+			// Already have ellipsis — only drop the next segment if there are
+			// still more segments after it (i.e. the final segment is preserved).
+			if len(segments) <= 2 {
+				break
+			}
+			segments = append(segments[:1], segments[2:]...)
+		} else {
+			// First truncation — replace the leftmost segment with ellipsis.
+			segments = append([]string{"…"}, segments[1:]...)
+		}
+	}
+
+	// Render styled output.
+	var parts []string
+	for i, seg := range segments {
+		if i == len(segments)-1 {
+			parts = append(parts, crumbActive.Render(seg))
+		} else {
+			parts = append(parts, crumbStyle.Render(seg))
+		}
+	}
+	return strings.Join(parts, crumbSep)
+}
+
 
 func getType(f analyzer.FileInfo) string {
 	if f.IsDir {
