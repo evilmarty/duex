@@ -60,6 +60,9 @@ When using the `bubbles/list` component, custom delegates allow you to render it
 - Always implement the `list.ItemDelegate` interface.
 - Ensure the delegate handles different rendering contexts (e.g., normal, selected, matched filter).
 - Maintain responsiveness by delegating CPU-intensive formatting outside the immediate render loop.
+- **Emoji Layout & Cell Widths**: Emojis (e.g., `⚠️ `) often occupy more than 1 byte but represent a specific number of visual cells in the terminal (typically 3 visual columns including a trailing space). Explicitly account for this visual cell width (instead of raw character length) when calculating list item margins, truncate lengths, and dynamic column alignments to prevent layout shift or visual jitter.
+- **Style Isolation for Compound Elements**: When highlighting selected list items, style each compound sub-component individually (e.g., `warnStyle.Render("⚠️ ") + selectedStyle.Render(text)`) rather than wrapping the entire concatenated block. This guarantees robust text attribute rendering (like bolding or background highlighting) and avoids rendering limitations in terminal emulators.
+
 
 ## Context-Aware Help Component
 

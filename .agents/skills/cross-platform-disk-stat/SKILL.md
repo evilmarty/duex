@@ -86,3 +86,9 @@ When writing unit tests for analyzer packages:
 - Use build tags (`_unix_test.go`, `_windows_test.go`) or platform runtime checks to execute specific tests.
 - For hard link tests, use `os.Link()` inside a temporary directory to verify that your deduplication registry functions as expected.
 - For sparse files, write small tests that check block size on supported filesystems (e.g., ext4, APFS).
+- **Deterministic Filesystem Mocking**: Avoid relying on active OS-level permission changes (e.g., `chmod 000` to simulate an unreadable directory) in tests. This is fragile, OS-dependent, and fails when tests are run by a root user. Instead, decouple directory listing (e.g., `os.ReadDir`) via a package-level injectable variable or hook (e.g., `var listDir = os.ReadDir`) and inject mock functions that simulate errors deterministically.
+- **Concurrency & Data Race Prevention**: When testing and running concurrent scans (e.g. using goroutine worker pools), make sure all reads/writes to shared state (such as file or error lists inside a main orchestrating thread) are strictly synchronized under a mutex or with atomic fields to prevent data races during parallel operations. Verify this locally by running tests with the Go race detector:
+  ```bash
+  go test -race ./...
+  ```
+
