@@ -36,9 +36,15 @@ type Result struct {
 	ErrorsCount int64
 }
 
+// readDir is the function used to list directory entries. It can be overridden
+// in tests to inject errors or mock entries.
+var readDir = os.ReadDir
+
 // Analyze scans the given path and returns the size of each entry and the total size.
 func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result, oneFileSystem bool, errorsCount *int64) (Result, error) {
-	entries, err := os.ReadDir(root)
+	// Snapshot readDir once so goroutines don't race on the package-level var.
+	listDir := readDir
+	entries, err := listDir(root)
 	if err != nil {
 		return Result{}, err
 	}
@@ -68,6 +74,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			if errorsCount != nil {
 				atomic.AddInt64(errorsCount, 1)
 			}
+			mu.Lock()
 			result.ErrorsCount++
 			result.Files = append(result.Files, FileInfo{
 				Name:         entry.Name(),
@@ -76,6 +83,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				IsDir:        entry.IsDir(),
 				IsUnreadable: true,
 			})
+			mu.Unlock()
 			continue
 		}
 
@@ -129,6 +137,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			} else {
 				ext = strings.ToLower(ext)
 			}
+			mu.Lock()
 			result.Files = append(result.Files, FileInfo{
 				Name:  entry.Name(),
 				Path:  path,
@@ -139,6 +148,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				},
 			})
 			result.TotalSize += size
+			mu.Unlock()
 		}
 	}
 
@@ -182,6 +192,9 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 	sem := make(chan struct{}, runtime.NumCPU())
 
 	var processDir func(dirPath string)
+	// Snapshot readDir once so all processDir goroutines share the same function
+	// reference without racing on the package-level var.
+	listDir := readDir
 	processDir = func(dirPath string) {
 		defer wg.Done()
 
@@ -214,7 +227,7 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 
 		sendProgress(progress, dirPath)
 
-		entries, err := os.ReadDir(dirPath)
+		entries, err := listDir(dirPath)
 		if err != nil {
 			atomic.AddInt64(&totalErrs, 1)
 			if errorsCount != nil {
