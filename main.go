@@ -488,7 +488,11 @@ func (m model) View() string {
 
 	if m.loading {
 		var s strings.Builder
-		s.WriteString(fmt.Sprintf("%s Scanning directory...\n\n", m.spinner.View()))
+		breadcrumbWidth := m.width - 6
+		if breadcrumbWidth < 20 {
+			breadcrumbWidth = 20
+		}
+		s.WriteString(fmt.Sprintf("%s %s\n\n", renderBreadcrumb(m.path, breadcrumbWidth), m.spinner.View()))
 		for _, p := range m.scannedPaths {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
 		}

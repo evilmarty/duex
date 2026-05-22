@@ -430,8 +430,11 @@ func TestViewRenderingOutputs(t *testing.T) {
 	m2.height = 24
 	m2.scannedPaths = []string{"/my/test/path/dir1", "/my/test/path/dir2"}
 	viewStrLoading := stripAnsi(m2.View())
-	if !strings.Contains(viewStrLoading, "Scanning directory...") {
-		t.Errorf("expected view to indicate scanning, got:\n%s", viewStrLoading)
+	if !strings.Contains(viewStrLoading, "my / test / path") {
+		t.Errorf("expected view to contain breadcrumb path, got:\n%s", viewStrLoading)
+	}
+	if !strings.Contains(viewStrLoading, "⣾") {
+		t.Errorf("expected view to contain spinner, got:\n%s", viewStrLoading)
 	}
 	if !strings.Contains(viewStrLoading, "  /my/test/path/dir1") {
 		t.Errorf("expected scanned paths to render, got:\n%s", viewStrLoading)
