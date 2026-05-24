@@ -24,6 +24,16 @@
 brew install evilmarty/duex/duex
 ```
 
+### Using Go
+
+Install the latest version directly using `go install`:
+
+```bash
+go install github.com/evilmarty/duex@latest
+```
+
+Ensure your `go/bin` directory (typically `$HOME/go/bin` or `$GOPATH/bin`) is in your system's `$PATH`.
+
 ### Pre-built Binaries
 
 You can download the latest release from [GitHub Releases](https://github.com/evilmarty/duex/releases/latest).
