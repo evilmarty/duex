@@ -102,3 +102,17 @@ To generate and view the detailed code coverage profile:
 go test -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
 ```
+
+## Contributing
+
+We welcome contributions to `duex`! If you would like to help improve this utility:
+
+1. Read our [Contributing Guide](CONTRIBUTING.md) to understand our development workflow, core architectural patterns (e.g., Bubble Tea TUI conventions, concurrent scan synchronization), and testing requirements.
+2. Search through existing issues or open a new issue to report bugs or discuss feature suggestions.
+3. Fork the repository, implement your changes (with tests to maintain 95%+ coverage for core packages), and open a pull request.
+
+Please make sure all concurrent code passes the Go race detector before submitting a PR.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
