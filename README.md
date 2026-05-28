@@ -1,10 +1,14 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="duex logo" width="180" height="180" />
+</p>
+
 # duex - Disk Usage Explorer
 
 [![CI](https://github.com/evilmarty/duex/actions/workflows/ci.yml/badge.svg)](https://github.com/evilmarty/duex/actions/workflows/ci.yml) ![GitHub Release](https://img.shields.io/github/v/release/evilmarty/duex)
 
 `duex` is a fast, interactive terminal-based disk usage utility written in Go. It helps you understand what is consuming space on your drives by providing a navigable, visual breakdown of folders and files.
 
-![duex preview](preview.png)
+![duex preview](assets/preview.png)
 
 ## Features
 

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Definitions for Gradients, Glows, and Filters -->
+  <defs>
+    <!-- Brand Primary Purple Gradient -->
+    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B5CF6" />
+      <stop offset="100%" stop-color="#6366F1" />
+    </linearGradient>
+
+    <!-- Brand Cyan Gradient (Sleek Neon Stem) -->
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00F2FE" />
+      <stop offset="100%" stop-color="#4FACFE" />
+    </linearGradient>
+
+
+
+    <!-- Core Glow Filter (Glow for Stem) -->
+    <!-- Using userSpaceOnUse to prevent narrow bounding-box clipping of the neon glow -->
+    <filter id="neonGlow" filterUnits="userSpaceOnUse" x="-100" y="-100" width="712" height="712">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Shadow for Layers (Shadow for Bow) -->
+    <!-- Using userSpaceOnUse to prevent narrow bounding-box clipping of the drop shadow -->
+    <filter id="dropShadow" filterUnits="userSpaceOnUse" x="-100" y="-100" width="712" height="712">
+      <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+
+    <!-- Mask to slice the concentric arcs into clean radial disk sectors -->
+    <mask id="diskSlices">
+      <!-- Everything white stays visible -->
+      <rect x="0" y="0" width="512" height="512" fill="#FFFFFF" />
+      
+      <!-- Black radial lines cut through the arcs to create clean gaps -->
+      <!-- Center is at (180, 256) -->
+      <!-- Horizontal cut (0 degrees) -->
+      <line x1="180" y1="256" x2="380" y2="256" stroke="#000000" stroke-width="12" />
+      <!-- Diagonal cut down-right (45 degrees) -->
+      <line x1="180" y1="256" x2="321" y2="397" stroke="#000000" stroke-width="12" />
+      <!-- Diagonal cut up-right (-45 degrees) -->
+      <line x1="180" y1="256" x2="321" y2="115" stroke="#000000" stroke-width="12" />
+    </mask>
+  </defs>
+
+
+
+  <!-- Main Monogram Group (Centered) -->
+  <g transform="translate(15, 0)">
+    
+    <!-- LEFT STEM: Sleek, glowing vertical cyan bar -->
+    <!-- Positioned at x=150, y=110, width=16, height=292 -->
+    <rect x="150" y="110" width="18" height="292" rx="9" fill="url(#cyanGrad)" filter="url(#neonGlow)" />
+
+    <!-- RIGHT BOW: Concentric segmented disk sectors (evoking disk tiers) -->
+    <!-- Center is at (180, 256). The drop shadow is applied to the outer group,
+         while the mask is applied to the inner group, ensuring the shadow is cast 
+         by the individual sliced segments rather than being clipped by the mask. -->
+    <g filter="url(#dropShadow)">
+      <g fill="none" stroke="url(#purpleGrad)" stroke-linecap="square" mask="url(#diskSlices)">
+        <!-- Outer Arc: Radius 150, Thickness 16 -->
+        <path d="M 180 106 A 150 150 0 0 1 180 406" stroke-width="16" />
+        
+        <!-- Middle Arc: Radius 110, Thickness 16 -->
+        <path d="M 180 146 A 110 110 0 0 1 180 366" stroke-width="16" />
+        
+        <!-- Inner Arc: Radius 70, Thickness 16 -->
+        <path d="M 180 186 A 70 70 0 0 1 180 326" stroke-width="16" />
+      </g>
+    </g>
+
+    <!-- Glowing accent dots/nodes to represent scanned data blocks -->
+    <!-- Placed on the vertical stem & sectors for high-tech micro-detailing -->
+    <circle cx="159" cy="180" r="3" fill="#FFFFFF" opacity="0.9" filter="url(#neonGlow)" />
+    <circle cx="159" cy="332" r="3" fill="#FFFFFF" opacity="0.9" filter="url(#neonGlow)" />
+  </g>
+</svg>
