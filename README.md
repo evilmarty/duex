@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="duex logo" width="180" height="180" />
+  <img src="assets/banner.png" alt="duex" width="100%" />
 </p>
 
 # duex - Disk Usage Explorer
