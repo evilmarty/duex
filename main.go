@@ -260,6 +260,7 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m *model) startScan(targetPath string) tea.Cmd {
+	m.err = nil
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -368,7 +369,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.scannedPaths = nil
 			m.progressChan = make(chan string, 100)
-			delete(m.dirCache, m.path)
+			m.invalidateCache(m.path)
 			return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
 
 		case "enter":
@@ -449,7 +450,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *model) invalidateCache(targetPath string) {
+	for cachedPath := range m.dirCache {
+		if isDescendantOrEqual(targetPath, cachedPath) || isDescendantOrEqual(cachedPath, targetPath) {
+			delete(m.dirCache, cachedPath)
+		}
+	}
+}
+
+func isDescendantOrEqual(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (m *model) setItems(res analyzer.Result) {
+	m.err = nil
 	m.errorsCount = res.ErrorsCount
 	files := res.Files
 	sort.Slice(files, func(i, j int) bool {

@@ -339,6 +339,63 @@ func TestUpdateKeyRefresh(t *testing.T) {
 	}
 }
 
+func TestInvalidateCacheCascading(t *testing.T) {
+	m := initialModel("/my/test/path")
+	m.dirCache["/my"] = analyzer.Result{}
+	m.dirCache["/my/test"] = analyzer.Result{}
+	m.dirCache["/my/test/path"] = analyzer.Result{}
+	m.dirCache["/my/test/path/child"] = analyzer.Result{}
+	m.dirCache["/my/test/path/child/grandchild"] = analyzer.Result{}
+	m.dirCache["/my/test/sibling"] = analyzer.Result{}
+	m.dirCache["/unrelated"] = analyzer.Result{}
+
+	m.invalidateCache("/my/test/path")
+
+	// Ancestors and descendants should be invalidated
+	pathsToCheckDeleted := []string{
+		"/my",
+		"/my/test",
+		"/my/test/path",
+		"/my/test/path/child",
+		"/my/test/path/child/grandchild",
+	}
+	for _, p := range pathsToCheckDeleted {
+		if _, cached := m.dirCache[p]; cached {
+			t.Errorf("expected path %q to be invalidated, but it was not", p)
+		}
+	}
+
+	// Unrelated or sibling paths should NOT be invalidated
+	pathsToCheckPreserved := []string{
+		"/my/test/sibling",
+		"/unrelated",
+	}
+	for _, p := range pathsToCheckPreserved {
+		if _, cached := m.dirCache[p]; !cached {
+			t.Errorf("expected path %q to be preserved, but it was deleted", p)
+		}
+	}
+}
+
+func TestErrorClearingOnScan(t *testing.T) {
+	m := initialModel("/my/test/path")
+	m.err = errors.New("some error")
+
+	// Triggering startScan should clear err
+	m.startScan("/my/test/path")
+	if m.err != nil {
+		t.Errorf("expected error to be cleared on startScan, but got: %v", m.err)
+	}
+
+	// Triggering setItems should clear err
+	m.err = errors.New("another error")
+	m.setItems(analyzer.Result{})
+	if m.err != nil {
+		t.Errorf("expected error to be cleared on setItems, but got: %v", m.err)
+	}
+}
+
+
 func TestUpdateKeyEnter(t *testing.T) {
 	// Enter directory -> trigger scan
 	m := initialModel("/my/test/path")
