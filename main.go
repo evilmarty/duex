@@ -247,11 +247,11 @@ func initialModel(path string) model {
 		help:          help.New(),
 		oneFileSystem: true,
 		errorsPtr:     new(int64),
+		progressChan:  make(chan string, 100),
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	m.progressChan = make(chan string, 100)
 	return tea.Batch(
 		m.spinner.Tick,
 		m.startScan(m.path),
@@ -502,7 +502,10 @@ func (m model) View() string {
 	}
 
 	header := titleStyle.Render("duex - Disk Usage Explorer")
-	var content string
+	headerHeight := lipgloss.Height(header)
+
+	var body string
+	var footer string
 
 	if m.loading {
 		var s strings.Builder
@@ -515,18 +518,24 @@ func (m model) View() string {
 			s.WriteString(faintStyle.Render("  " + truncate(p, m.width-4)) + "\n")
 		}
 
+		var footerBuilder strings.Builder
 		errs := atomic.LoadInt64(m.errorsPtr)
 		if errs > 0 {
 			warningStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#D1A100")).
 				Bold(true)
-			s.WriteString("\n" + warningStyle.Render(fmt.Sprintf("⚠️  Warning: %d directories/files skipped so far.", errs)) + "\n")
+			footerBuilder.WriteString("\n" + warningStyle.Render(fmt.Sprintf("⚠️  Warning: %d directories/files skipped so far.", errs)) + "\n")
 		}
+		footerBuilder.WriteString("\n" + m.help.ShortHelpView(keys.ScanningHelp(len(m.history) > 0)))
+		footer = footerBuilder.String()
 
-		helpView := "\n" + m.help.ShortHelpView(keys.ScanningHelp(len(m.history) > 0))
-		content = s.String() + helpView
+		footerHeight := lipgloss.Height(footer)
+		bodyHeight := m.height - headerHeight - footerHeight
+		if bodyHeight < 1 {
+			bodyHeight = 1
+		}
+		body = lipgloss.NewStyle().Height(bodyHeight).Render(s.String())
 	} else {
-
 		leftWidth := m.width - 40 - 6
 		if leftWidth < 20 {
 			leftWidth = 20
@@ -559,25 +568,31 @@ func (m model) View() string {
 			}
 		}
 
-		mainContent := lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			leftPane.String(),
-			detailStyle.Height(m.list.Height()+2).Render(rightPane.String()),
-		)
-
-		var warningView string
+		var footerBuilder strings.Builder
 		if m.errorsCount > 0 {
 			warningStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#D1A100")).
 				Bold(true)
-			warningView = "\n" + warningStyle.Render(fmt.Sprintf("⚠️  Warning: %d files/directories were skipped due to permission errors.", m.errorsCount))
+			footerBuilder.WriteString("\n" + warningStyle.Render(fmt.Sprintf("⚠️  Warning: %d files/directories were skipped due to permission errors.", m.errorsCount)))
+		}
+		footerBuilder.WriteString("\n" + m.help.ShortHelpView(keys.BrowsingHelp()))
+		footer = footerBuilder.String()
+
+		footerHeight := lipgloss.Height(footer)
+		bodyHeight := m.height - headerHeight - footerHeight
+		if bodyHeight < 1 {
+			bodyHeight = 1
 		}
 
-		helpView := "\n" + m.help.ShortHelpView(keys.BrowsingHelp())
-		content = mainContent + warningView + helpView
+		mainContent := lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			leftPane.String(),
+			detailStyle.Height(bodyHeight).Render(rightPane.String()),
+		)
+		body = lipgloss.NewStyle().Height(bodyHeight).Render(mainContent)
 	}
 
-	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, content))
+	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
 }
 
 func truncate(s string, max int) string {
