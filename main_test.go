@@ -120,10 +120,17 @@ func TestInitialModel(t *testing.T) {
 
 func TestModelInit(t *testing.T) {
 	m := initialModel("/my/test/path")
+	chanBefore := m.progressChan
 	cmd := m.Init()
 
 	if cmd == nil {
 		t.Fatal("expected Init() to return a batch command")
+	}
+	if m.progressChan == nil {
+		t.Error("expected m.progressChan to be non-nil after initialization")
+	}
+	if m.progressChan != chanBefore {
+		t.Error("expected m.progressChan reference to remain identical after calling Init()")
 	}
 }
 
@@ -588,6 +595,14 @@ func TestViewRenderingOutputs(t *testing.T) {
 	viewStrWarn := stripAnsi(m5.View())
 	if !strings.Contains(viewStrWarn, "Warning: 5 files/directories were skipped") {
 		t.Errorf("expected warning view to contain permission error notification, got:\n%s", viewStrWarn)
+	}
+
+	// 6. Height alignment validation
+	if h := lipgloss.Height(m2.View()); h != m2.height {
+		t.Errorf("expected loading view height to be %d, got %d", m2.height, h)
+	}
+	if h := lipgloss.Height(m3.View()); h != m3.height {
+		t.Errorf("expected browsing view height to be %d, got %d", m3.height, h)
 	}
 }
 
