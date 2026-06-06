@@ -164,8 +164,14 @@ func TestUpdateWindowSize(t *testing.T) {
 	if m2.list.Width() != 54 { // 100 - 40 - 6 = 54
 		t.Errorf("expected list width of 54, got %d", m2.list.Width())
 	}
-	if m2.list.Height() != 40 { // 50 - 10 = 40
-		t.Errorf("expected list height of 40, got %d", m2.list.Height())
+	if m2.topList.Width() != 54 {
+		t.Errorf("expected topList width of 54, got %d", m2.topList.Width())
+	}
+	if m2.list.Height() != 38 { // 50 - 12 = 38
+		t.Errorf("expected list height of 38, got %d", m2.list.Height())
+	}
+	if m2.topList.Height() != 38 {
+		t.Errorf("expected topList height of 38, got %d", m2.topList.Height())
 	}
 }
 
@@ -796,6 +802,7 @@ func TestParseFlags(t *testing.T) {
 		wantOneFileSystem bool
 		wantShowHelp      bool
 		wantShowVersion   bool
+		wantMinSize       int64
 		wantErr           bool
 	}{
 		{
@@ -880,17 +887,49 @@ func TestParseFlags(t *testing.T) {
 			args:    []string{"path1", "path2"},
 			wantErr: true,
 		},
+		{
+			name:              "min size short flag",
+			args:              []string{"-m", "50mb"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantMinSize:       50 * 1024 * 1024,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "min size long flag",
+			args:              []string{"--min-size", "2gb"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantMinSize:       2 * 1024 * 1024 * 1024,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:    "min size invalid",
+			args:    []string{"-m", "invalid"},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			path, oneFS, help, version, err := parseFlags(&buf, tt.args)
+			path, oneFS, minSize, help, version, err := parseFlags(&buf, tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseFlags() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
 				return
+			}
+			expectedMinSize := tt.wantMinSize
+			if expectedMinSize == 0 {
+				expectedMinSize = 100 * 1024 * 1024
+			}
+			if minSize != expectedMinSize {
+				t.Errorf("minSize = %d, want %d", minSize, expectedMinSize)
 			}
 			if path != tt.wantPath {
 				t.Errorf("path = %q, want %q", path, tt.wantPath)
@@ -1287,3 +1326,87 @@ func TestDeleteFile(t *testing.T) {
 	}
 }
 
+func TestTabsFeature(t *testing.T) {
+	// 1. Initial State
+	m := initialModel("/my/test/path")
+	m.loading = false
+	if m.activeTab != 0 {
+		t.Errorf("expected activeTab to be 0, got %d", m.activeTab)
+	}
+
+	// 2. Tab Key Switch
+	msgTab := tea.KeyMsg{Type: tea.KeyTab}
+	newModel, cmd := m.Update(msgTab)
+	m2 := newModel.(model)
+	if cmd != nil {
+		t.Error("expected no command on tab switch")
+	}
+	if m2.activeTab != 1 {
+		t.Errorf("expected activeTab to switch to 1, got %d", m2.activeTab)
+	}
+
+	// Switch back
+	newModelBack, _ := m2.Update(msgTab)
+	mBack := newModelBack.(model)
+	if mBack.activeTab != 0 {
+		t.Errorf("expected activeTab to switch back to 0, got %d", mBack.activeTab)
+	}
+
+	// 3. setItems populates both list and topList
+	mockResult := analyzer.Result{
+		Files: []analyzer.FileInfo{
+			{Name: "data.csv", Path: "/my/test/path/data.csv", Size: 4096, IsDir: false},
+		},
+		TotalSize: 4096,
+		TopFiles: []analyzer.FileInfo{
+			{Name: "sub1.txt", Path: "/my/test/path/sub/sub1.txt", Size: 10000, IsDir: false},
+		},
+	}
+	m.setItems(mockResult)
+	if len(m.list.Items()) != 2 { // "." and "data.csv"
+		t.Errorf("expected 2 items in list, got %d", len(m.list.Items()))
+	}
+	if len(m.topList.Items()) != 1 { // "sub1.txt"
+		t.Errorf("expected 1 item in topList, got %d", len(m.topList.Items()))
+	}
+
+	// Verify relPath in topItem
+	topItem0 := m.topList.Items()[0].(topItem)
+	if topItem0.relPath != "sub/sub1.txt" {
+		t.Errorf("expected relPath 'sub/sub1.txt', got %q", topItem0.relPath)
+	}
+
+	// 4. Pressing Enter on a topItem navigates to its parent
+	m2.setItems(mockResult) // activeTab = 1
+	m2.topList.Select(0)    // select the topItem
+
+	msgEnter := tea.KeyMsg{Type: tea.KeyEnter}
+	newModelEnter, cmdEnter := m2.Update(msgEnter)
+	if cmdEnter == nil {
+		t.Error("expected non-nil command returned to trigger scanning parent directory")
+	}
+	m3 := newModelEnter.(model)
+
+	if m3.activeTab != 0 {
+		t.Error("expected activeTab to switch back to 0 (Directory view) after enter")
+	}
+	if m3.path != "/my/test/path/sub" {
+		t.Errorf("expected parent path '/my/test/path/sub', got %q", m3.path)
+	}
+	if m3.targetFileToSelect != "/my/test/path/sub/sub1.txt" {
+		t.Errorf("expected targetFileToSelect to be the file path, got %q", m3.targetFileToSelect)
+	}
+
+	// 5. Test selection and highlighting
+	mockResultSub := analyzer.Result{
+		Files: []analyzer.FileInfo{
+			{Name: "sub1.txt", Path: "/my/test/path/sub/sub1.txt", Size: 10000, IsDir: false},
+		},
+		TotalSize: 10000,
+	}
+	m3.setItems(mockResultSub)
+	// sub1.txt should be selected. Since "." is index 0, "sub1.txt" is index 1.
+	if m3.list.Index() != 1 {
+		t.Errorf("expected list index to be 1 (selected sub1.txt), got %d", m3.list.Index())
+	}
+}

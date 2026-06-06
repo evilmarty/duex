@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,6 +35,7 @@ type Result struct {
 	TotalSize   int64
 	Breakdown   []Breakdown
 	ErrorsCount int64
+	TopFiles    []FileInfo
 }
 
 // readDir is the function used to list directory entries. It can be overridden
@@ -41,7 +43,7 @@ type Result struct {
 var readDir = os.ReadDir
 
 // Analyze scans the given path and returns the size of each entry and the total size.
-func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result, oneFileSystem bool, errorsCount *int64) (Result, error) {
+func Analyze(ctx context.Context, root string, progress chan<- string, cache map[string]Result, oneFileSystem bool, errorsCount *int64, minSize int64) (Result, error) {
 	// Snapshot readDir once so goroutines don't race on the package-level var.
 	listDir := readDir
 	entries, err := listDir(root)
@@ -107,6 +109,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				})
 				result.TotalSize += cached.TotalSize
 				result.ErrorsCount += cached.ErrorsCount
+				result.TopFiles = mergeTopFiles(result.TopFiles, cached.TopFiles)
 				mu.Unlock()
 				continue
 			}
@@ -114,7 +117,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown, errs := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount)
+				size, breakdown, errs, dirTopFiles := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount, minSize)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:         n,
@@ -127,6 +130,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				})
 				result.TotalSize += size
 				result.ErrorsCount += errs
+				result.TopFiles = mergeTopFiles(result.TopFiles, dirTopFiles)
 				mu.Unlock()
 			}(path, entry.Name())
 		} else {
@@ -148,6 +152,12 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				},
 			})
 			result.TotalSize += size
+			result.TopFiles = insertTopFile(result.TopFiles, FileInfo{
+				Name:  entry.Name(),
+				Path:  path,
+				Size:  size,
+				IsDir: false,
+			}, minSize)
 			mu.Unlock()
 		}
 	}
@@ -176,13 +186,16 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 // but at most runtime.NumCPU() goroutines perform filesystem I/O concurrently via a
 // semaphore. This eliminates the sequential bottleneck of filepath.WalkDir while
 // preventing resource exhaustion on deep or wide directory trees.
-func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64) (int64, []Breakdown, int64) {
+func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64, minSize int64) (int64, []Breakdown, int64, []FileInfo) {
 	var (
 		totalSize  int64
 		totalErrs  int64
 		extMu      sync.Mutex
 		extensions = make(map[string]int64)
 		wg         sync.WaitGroup
+
+		topFilesMu sync.Mutex
+		topFiles   []FileInfo
 	)
 
 	// sem is a counting semaphore that limits concurrent filesystem I/O to
@@ -221,6 +234,10 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 					extensions[b.Extension] += b.Size
 				}
 				extMu.Unlock()
+
+				topFilesMu.Lock()
+				topFiles = mergeTopFiles(topFiles, cached.TopFiles)
+				topFilesMu.Unlock()
 				return
 			}
 		}
@@ -283,6 +300,15 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 				extMu.Lock()
 				extensions[ext] += s
 				extMu.Unlock()
+
+				topFilesMu.Lock()
+				topFiles = insertTopFile(topFiles, FileInfo{
+					Name:  entry.Name(),
+					Path:  entryPath,
+					Size:  s,
+					IsDir: false,
+				}, minSize)
+				topFilesMu.Unlock()
 			}
 		}
 	}
@@ -299,7 +325,7 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 		return breakdown[i].Size > breakdown[j].Size
 	})
 
-	return totalSize, breakdown, totalErrs
+	return totalSize, breakdown, totalErrs, topFiles
 }
 
 func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {
@@ -319,4 +345,86 @@ func sendProgress(progress chan<- string, path string) {
 		default:
 		}
 	}
+}
+
+func insertTopFile(list []FileInfo, file FileInfo, minSize int64) []FileInfo {
+	if file.Size < minSize {
+		return list
+	}
+	idx := sort.Search(len(list), func(i int) bool {
+		return list[i].Size < file.Size
+	})
+	list = append(list, FileInfo{})
+	copy(list[idx+1:], list[idx:])
+	list[idx] = file
+	return list
+}
+
+func mergeTopFiles(a, b []FileInfo) []FileInfo {
+	merged := make([]FileInfo, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) || j < len(b) {
+		if i < len(a) && (j >= len(b) || a[i].Size >= b[j].Size) {
+			merged = append(merged, a[i])
+			i++
+		} else {
+			merged = append(merged, b[j])
+			j++
+		}
+	}
+	return merged
+}
+
+func ParseSize(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	idx := strings.IndexFunc(s, func(r rune) bool {
+		return r < '0' || r > '9'
+	})
+
+	if idx == 0 {
+		return 0, fmt.Errorf("invalid size format: %q", s)
+	}
+
+	var numStr string
+	var unitStr string
+	if idx == -1 {
+		numStr = s
+		unitStr = ""
+	} else {
+		numStr = s[:idx]
+		unitStr = s[idx:]
+	}
+
+	var num int64
+	_, err := fmt.Sscan(numStr, &num)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size number: %q", numStr)
+	}
+
+	unitStr = strings.TrimSuffix(unitStr, "b")
+	unitStr = strings.TrimSuffix(unitStr, "i")
+
+	var multiplier int64 = 1
+	switch unitStr {
+	case "":
+		multiplier = 1
+	case "k":
+		multiplier = 1024
+	case "m":
+		multiplier = 1024 * 1024
+	case "g":
+		multiplier = 1024 * 1024 * 1024
+	case "t":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	case "p":
+		multiplier = 1024 * 1024 * 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("unknown size unit: %q", unitStr)
+	}
+
+	return num * multiplier, nil
 }
