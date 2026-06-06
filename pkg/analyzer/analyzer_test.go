@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -313,7 +314,7 @@ func TestDirSizeWithCache(t *testing.T) {
 	}
 
 	// Walk parentDir. It should encounter childDir and use cache.
-	size, breakdown, _ := DirSize(context.Background(), parentDir, nil, nil, cache, false, 0, nil)
+	size, breakdown, _, _ := DirSize(context.Background(), parentDir, nil, nil, cache, false, 0, nil)
 	if size != 12345 {
 		t.Errorf("Expected size 12345 from cache, got %d", size)
 	}
@@ -332,7 +333,7 @@ func TestDirSizeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	size, _, _ := DirSize(ctx, tmpDir, nil, nil, nil, false, 0, nil)
+	size, _, _, _ := DirSize(ctx, tmpDir, nil, nil, nil, false, 0, nil)
 	if size != 0 {
 		t.Errorf("Expected 0 size on canceled context, got %d", size)
 	}
@@ -592,7 +593,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 
 	var errorsCount2 int64
 	var seen2 sync.Map
-	_, _, errs2 := DirSize(context.Background(), tmpDir2, nil, &seen2, nil, true, rootDev2, &errorsCount2)
+	_, _, errs2, _ := DirSize(context.Background(), tmpDir2, nil, &seen2, nil, true, rootDev2, &errorsCount2)
 
 	if errorsCount2 < 1 {
 		t.Errorf("Expected at least 1 error count for unreadable subdirectory in DirSize, got %d", errorsCount2)
@@ -620,7 +621,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir3, "file.txt"), []byte("data"), 0644)
 
 	var errorsCount3 int64
-	_, _, errs3 := DirSize(context.Background(), tmpDir3, nil, nil, nil, false, 0, &errorsCount3)
+	_, _, errs3, _ := DirSize(context.Background(), tmpDir3, nil, nil, nil, false, 0, &errorsCount3)
 
 	if errorsCount3 < 1 {
 		t.Errorf("Expected at least 1 error count for unreadable subdirectory in DirSize, got %d", errorsCount3)
@@ -652,7 +653,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 		},
 	}
 	var errorsCount4 int64
-	_, _, errs4 := DirSize(context.Background(), subDir4, nil, nil, cache, false, 0, &errorsCount4)
+	_, _, errs4, _ := DirSize(context.Background(), subDir4, nil, nil, cache, false, 0, &errorsCount4)
 	if errorsCount4 != 5 {
 		t.Errorf("Expected cached errors count 5 to be accumulated, got %d", errorsCount4)
 	}
@@ -706,7 +707,7 @@ func TestDirSizeConcurrentDeep(t *testing.T) {
 
 	progress := make(chan string, 256)
 	var seen sync.Map
-	size, breakdown, errs := DirSize(context.Background(), root, progress, &seen, nil, false, 0, nil)
+	size, breakdown, errs, _ := DirSize(context.Background(), root, progress, &seen, nil, false, 0, nil)
 
 	if errs != 0 {
 		t.Errorf("expected 0 errors, got %d", errs)
@@ -761,7 +762,7 @@ func BenchmarkDirSize(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var seen sync.Map
-		DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
+		_, _, _, _ = DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
 	}
 }
 
@@ -835,7 +836,7 @@ func TestDirSizePreCancelledContext(t *testing.T) {
 
 	var seen sync.Map
 	// Should not hang or panic even with a pre-cancelled context.
-	DirSize(ctx, root, nil, &seen, nil, false, 0, nil)
+	_, _, _, _ = DirSize(ctx, root, nil, &seen, nil, false, 0, nil)
 }
 
 // TestDirSizeOneFileSystemInfoError covers the entry.Info() error branch inside
@@ -856,7 +857,7 @@ func TestDirSizeBreakdownOrder(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "c.log"), make([]byte, 256), 0644)
 
 	var seen sync.Map
-	_, breakdown, _ := DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
+	_, breakdown, _, _ := DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
 
 	if len(breakdown) < 2 {
 		t.Fatalf("expected at least 2 breakdown entries, got %d", len(breakdown))
@@ -896,4 +897,75 @@ func TestAnalyzePreCancelledContext(t *testing.T) {
 	}
 }
 
+func TestTopFiles(t *testing.T) {
+	// 1. Test insertTopFile
+	var list []FileInfo
+	list = insertTopFile(list, FileInfo{Name: "f3.txt", Size: 30}, 3)
+	list = insertTopFile(list, FileInfo{Name: "f1.txt", Size: 10}, 3)
+	list = insertTopFile(list, FileInfo{Name: "f4.txt", Size: 40}, 3)
+	list = insertTopFile(list, FileInfo{Name: "f2.txt", Size: 20}, 3)
+
+	if len(list) != 3 {
+		t.Fatalf("expected len 3, got %d", len(list))
+	}
+	if list[0].Name != "f4.txt" || list[1].Name != "f3.txt" || list[2].Name != "f2.txt" {
+		t.Errorf("incorrect sort or eviction order: %v", list)
+	}
+
+	// 2. Test mergeTopFiles
+	listA := []FileInfo{
+		{Name: "a1", Size: 100},
+		{Name: "a2", Size: 80},
+	}
+	listB := []FileInfo{
+		{Name: "b1", Size: 90},
+		{Name: "b2", Size: 70},
+	}
+	merged := mergeTopFiles(listA, listB, 3)
+	if len(merged) != 3 {
+		t.Fatalf("expected merged len 3, got %d", len(merged))
+	}
+	if merged[0].Name != "a1" || merged[1].Name != "b1" || merged[2].Name != "a2" {
+		t.Errorf("incorrect merge order: %v", merged)
+	}
+
+	// 3. Test recursive collection via Analyze
+	tmpDir, err := os.MkdirTemp("", "duex-topfiles-test")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a few files with distinct physical size tiers
+	os.WriteFile(filepath.Join(tmpDir, "root1.txt"), make([]byte, 100), 0644)
+	subDir := filepath.Join(tmpDir, "sub")
+	os.Mkdir(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "sub1.txt"), make([]byte, 30000), 0644)
+	os.WriteFile(filepath.Join(subDir, "sub2.txt"), make([]byte, 10000), 0644)
+
+	res, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// We expect 3 top files sorted by size descending
+	if len(res.TopFiles) != 3 {
+		t.Fatalf("expected 3 top files, got %d", len(res.TopFiles))
+	}
+	if !strings.HasSuffix(res.TopFiles[0].Path, "sub1.txt") {
+		t.Errorf("expected sub1.txt to be largest, got %+v", res.TopFiles[0])
+	}
+	if !strings.HasSuffix(res.TopFiles[1].Path, "sub2.txt") {
+		t.Errorf("expected sub2.txt to be second, got %+v", res.TopFiles[1])
+	}
+	if !strings.HasSuffix(res.TopFiles[2].Path, "root1.txt") {
+		t.Errorf("expected root1.txt to be third, got %+v", res.TopFiles[2])
+	}
+	if res.TopFiles[0].Size <= res.TopFiles[1].Size {
+		t.Errorf("expected size of sub1.txt (%d) > sub2.txt (%d)", res.TopFiles[0].Size, res.TopFiles[1].Size)
+	}
+	if res.TopFiles[1].Size <= res.TopFiles[2].Size {
+		t.Errorf("expected size of sub2.txt (%d) > root1.txt (%d)", res.TopFiles[1].Size, res.TopFiles[2].Size)
+	}
+}
 

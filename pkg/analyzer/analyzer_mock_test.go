@@ -106,7 +106,7 @@ func TestDirSizeFileEntryInfoError(t *testing.T) {
 		errDirEntry{name: "ghost.log", isDir: false},
 	}, func() {
 		var seen sync.Map
-		_, _, errs := DirSize(context.Background(), root, nil, &seen, nil, false, 0, &errCount)
+		_, _, errs, _ := DirSize(context.Background(), root, nil, &seen, nil, false, 0, &errCount)
 		if errs < 1 {
 			t.Errorf("expected errs >= 1, got %d", errs)
 		}
@@ -132,7 +132,7 @@ func TestDirSizeDirEntryInfoError(t *testing.T) {
 		var seen sync.Map
 		// Use oneFileSystem=true with rootDev=0 so the device-ID check is skipped
 		// and we proceed to entry.Info() for the directory entry.
-		_, _, errs := DirSize(context.Background(), root, nil, &seen, nil, true, 0, &errCount)
+		_, _, errs, _ := DirSize(context.Background(), root, nil, &seen, nil, true, 0, &errCount)
 		if errs < 1 {
 			t.Errorf("expected errs >= 1 from errDirEntry dir, got %d", errs)
 		}

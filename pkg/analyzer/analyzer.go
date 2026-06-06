@@ -12,6 +12,8 @@ import (
 )
 
 // Breakdown represents a breakdown of file sizes by extension.
+const maxTopFiles = 50
+
 type Breakdown struct {
 	Extension string
 	Size      int64
@@ -34,6 +36,7 @@ type Result struct {
 	TotalSize   int64
 	Breakdown   []Breakdown
 	ErrorsCount int64
+	TopFiles    []FileInfo
 }
 
 // readDir is the function used to list directory entries. It can be overridden
@@ -107,6 +110,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				})
 				result.TotalSize += cached.TotalSize
 				result.ErrorsCount += cached.ErrorsCount
+				result.TopFiles = mergeTopFiles(result.TopFiles, cached.TopFiles, maxTopFiles)
 				mu.Unlock()
 				continue
 			}
@@ -114,7 +118,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown, errs := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount)
+				size, breakdown, errs, dirTopFiles := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
 					Name:         n,
@@ -127,6 +131,7 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				})
 				result.TotalSize += size
 				result.ErrorsCount += errs
+				result.TopFiles = mergeTopFiles(result.TopFiles, dirTopFiles, maxTopFiles)
 				mu.Unlock()
 			}(path, entry.Name())
 		} else {
@@ -148,6 +153,12 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 				},
 			})
 			result.TotalSize += size
+			result.TopFiles = insertTopFile(result.TopFiles, FileInfo{
+				Name:  entry.Name(),
+				Path:  path,
+				Size:  size,
+				IsDir: false,
+			}, maxTopFiles)
 			mu.Unlock()
 		}
 	}
@@ -176,13 +187,16 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 // but at most runtime.NumCPU() goroutines perform filesystem I/O concurrently via a
 // semaphore. This eliminates the sequential bottleneck of filepath.WalkDir while
 // preventing resource exhaustion on deep or wide directory trees.
-func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64) (int64, []Breakdown, int64) {
+func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64) (int64, []Breakdown, int64, []FileInfo) {
 	var (
 		totalSize  int64
 		totalErrs  int64
 		extMu      sync.Mutex
 		extensions = make(map[string]int64)
 		wg         sync.WaitGroup
+
+		topFilesMu sync.Mutex
+		topFiles   []FileInfo
 	)
 
 	// sem is a counting semaphore that limits concurrent filesystem I/O to
@@ -221,6 +235,10 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 					extensions[b.Extension] += b.Size
 				}
 				extMu.Unlock()
+
+				topFilesMu.Lock()
+				topFiles = mergeTopFiles(topFiles, cached.TopFiles, maxTopFiles)
+				topFilesMu.Unlock()
 				return
 			}
 		}
@@ -283,6 +301,15 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 				extMu.Lock()
 				extensions[ext] += s
 				extMu.Unlock()
+
+				topFilesMu.Lock()
+				topFiles = insertTopFile(topFiles, FileInfo{
+					Name:  entry.Name(),
+					Path:  entryPath,
+					Size:  s,
+					IsDir: false,
+				}, maxTopFiles)
+				topFilesMu.Unlock()
 			}
 		}
 	}
@@ -299,7 +326,7 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 		return breakdown[i].Size > breakdown[j].Size
 	})
 
-	return totalSize, breakdown, totalErrs
+	return totalSize, breakdown, totalErrs, topFiles
 }
 
 func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {
@@ -319,4 +346,35 @@ func sendProgress(progress chan<- string, path string) {
 		default:
 		}
 	}
+}
+
+func insertTopFile(list []FileInfo, file FileInfo, limit int) []FileInfo {
+	idx := sort.Search(len(list), func(i int) bool {
+		return list[i].Size < file.Size
+	})
+	if idx >= limit {
+		return list
+	}
+	list = append(list, FileInfo{})
+	copy(list[idx+1:], list[idx:])
+	list[idx] = file
+	if len(list) > limit {
+		list = list[:limit]
+	}
+	return list
+}
+
+func mergeTopFiles(a, b []FileInfo, limit int) []FileInfo {
+	merged := make([]FileInfo, 0, len(a)+len(b))
+	i, j := 0, 0
+	for len(merged) < limit && (i < len(a) || j < len(b)) {
+		if i < len(a) && (j >= len(b) || a[i].Size >= b[j].Size) {
+			merged = append(merged, a[i])
+			i++
+		} else {
+			merged = append(merged, b[j])
+			j++
+		}
+	}
+	return merged
 }

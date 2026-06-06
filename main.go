@@ -87,12 +87,91 @@ var (
 			Foreground(lipgloss.Color("#888888")).
 			Background(lipgloss.Color("#333333")).
 			Padding(0, 2)
+
+	// Tab styles
+	activeTabStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Background(lipgloss.Color("#7D56F4")).
+			Padding(0, 2).
+			MarginRight(2)
+
+	inactiveTabStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#888888")).
+			Background(lipgloss.Color("#2C2C2C")).
+			Padding(0, 2).
+			MarginRight(2)
 )
 
 var removeAll = os.RemoveAll
 
 type item struct {
 	analyzer.FileInfo
+}
+
+type topItem struct {
+	analyzer.FileInfo
+	relPath string
+}
+
+func (i topItem) Title() string       { return i.relPath }
+func (i topItem) Description() string {
+	if i.IsUnreadable {
+		return "⚠️"
+	}
+	return formatSize(i.Size)
+}
+func (i topItem) FilterValue() string { return i.relPath }
+
+type topItemDelegate struct{}
+
+func (d topItemDelegate) Height() int                               { return 1 }
+func (d topItemDelegate) Spacing() int                              { return 0 }
+func (d topItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d topItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(topItem)
+	if !ok {
+		return
+	}
+
+	str := i.relPath
+
+	cursor := " "
+	style := itemStyle
+	if index == m.Index() {
+		cursor = ">"
+		style = selectedItemStyle
+	}
+
+	sizeStr := formatSize(i.Size)
+	sizeLen := len(sizeStr)
+	effectiveSizeStyle := sizeStyle
+	if index == m.Index() {
+		effectiveSizeStyle = sizeStyle.Bold(true)
+	}
+
+	var sizeRendered string
+	if i.IsUnreadable {
+		sizeStr = "⚠️ "
+		sizeLen = 3
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D1A100")).Bold(true)
+		sizeRendered = warnStyle.Render("⚠️ ")
+	} else if i.IsDir && i.ErrorsCount > 0 {
+		sizeStr = "⚠️ " + sizeStr
+		sizeLen = 3 + len(formatSize(i.Size))
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D1A100")).Bold(true)
+		sizeRendered = warnStyle.Render("⚠️ ") + effectiveSizeStyle.Render(formatSize(i.Size))
+	} else {
+		sizeRendered = effectiveSizeStyle.Render(sizeStr)
+	}
+
+	nameWidth := m.Width() - sizeLen - 5
+	if nameWidth < 10 {
+		nameWidth = 10
+	}
+
+	namePart := fmt.Sprintf("%s %-*s", cursor, nameWidth, truncate(str, nameWidth))
+	fmt.Fprint(w, style.Render(namePart)+" "+sizeRendered)
 }
 
 type keyMap struct {
@@ -105,6 +184,7 @@ type keyMap struct {
 	Filter  key.Binding
 	Quit    key.Binding
 	Delete  key.Binding
+	Tab     key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -114,12 +194,12 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter, k.Back},
-		{k.Refresh, k.Filter, k.Quit, k.Delete},
+		{k.Refresh, k.Filter, k.Quit, k.Delete, k.Tab},
 	}
 }
 
 func (k keyMap) BrowsingHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Delete, k.Refresh, k.Filter, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Delete, k.Refresh, k.Filter, k.Tab, k.Quit}
 }
 
 func (k keyMap) ScanningHelp(hasHistory bool) []key.Binding {
@@ -165,6 +245,10 @@ var keys = keyMap{
 	Delete: key.NewBinding(
 		key.WithKeys("d"),
 		key.WithHelp("d", "delete"),
+	),
+	Tab: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "switch tab"),
 	),
 }
 
@@ -262,25 +346,28 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 }
 
 type model struct {
-	path          string
-	selected      map[int]struct{}
-	err           error
-	loading       bool
-	width         int
-	height        int
-	dirCache      map[string]analyzer.Result
-	spinner       spinner.Model
-	scannedPaths  []string
-	progressChan  chan string
-	list          list.Model
-	cancel        context.CancelFunc
-	history       []string
-	help          help.Model
-	oneFileSystem bool
-	errorsCount   int64 // Track permission/access errors in currently viewed path
-	errorsPtr     *int64 // Pointer to the errors count passed to the analyzer
-	deleteTarget          *analyzer.FileInfo
-	deleting              bool
+	path               string
+	selected           map[int]struct{}
+	err                error
+	loading            bool
+	width              int
+	height             int
+	dirCache           map[string]analyzer.Result
+	spinner            spinner.Model
+	scannedPaths       []string
+	progressChan       chan string
+	list               list.Model
+	topList            list.Model
+	activeTab          int // 0 = Directory, 1 = Top Files
+	targetFileToSelect string
+	cancel             context.CancelFunc
+	history            []string
+	help               help.Model
+	oneFileSystem      bool
+	errorsCount        int64 // Track permission/access errors in currently viewed path
+	errorsPtr          *int64 // Pointer to the errors count passed to the analyzer
+	deleteTarget       *analyzer.FileInfo
+	deleting           bool
 	confirmDeleteSelected bool
 }
 
@@ -314,6 +401,13 @@ func initialModel(path string) model {
 	l.SetShowHelp(false)
 	l.Styles.PaginationStyle = lipgloss.NewStyle().PaddingLeft(2)
 
+	tl := list.New([]list.Item{}, topItemDelegate{}, 0, 0)
+	tl.SetShowTitle(false)
+	tl.SetShowStatusBar(false)
+	tl.SetFilteringEnabled(true)
+	tl.SetShowHelp(false)
+	tl.Styles.PaginationStyle = lipgloss.NewStyle().PaddingLeft(2)
+
 	return model{
 		path:          path,
 		selected:      make(map[int]struct{}),
@@ -321,6 +415,8 @@ func initialModel(path string) model {
 		dirCache:      make(map[string]analyzer.Result),
 		spinner:       s,
 		list:          l,
+		topList:       tl,
+		activeTab:     0,
 		help:          help.New(),
 		oneFileSystem: true,
 		errorsPtr:     new(int64),
@@ -401,13 +497,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			leftWidth = 20
 		}
 
-		// Overhead: Header(3), Path(2), Footer(2), Padding(2) = 9
-		listHeight := m.height - 10
+		// Overhead: Header(3), Path(2), Tabs(2), Footer(2), Padding(2) = 11
+		listHeight := m.height - 12
 		if listHeight < 5 {
 			listHeight = 5
 		}
 
 		m.list.SetSize(leftWidth, listHeight)
+		m.topList.SetSize(leftWidth, listHeight)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -471,22 +568,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Not loading - browsing state
-		if m.list.FilterState() == list.Filtering {
+		activeList := &m.list
+		if m.activeTab == 1 {
+			activeList = &m.topList
+		}
+
+		if activeList.FilterState() == list.Filtering {
 			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
+			*activeList, cmd = activeList.Update(msg)
 			return m, cmd
 		}
 
 		switch msg.String() {
+		case "tab":
+			if m.activeTab == 0 {
+				m.activeTab = 1
+			} else {
+				m.activeTab = 0
+			}
+			return m, nil
+
 		case "up", "k", "down", "j":
 			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
+			*activeList, cmd = activeList.Update(msg)
 			return m, cmd
 
 		case "d":
-			selectedItem := m.list.SelectedItem()
+			selectedItem := activeList.SelectedItem()
 			if selectedItem != nil {
-				selected := selectedItem.(item).FileInfo
+				var selected analyzer.FileInfo
+				if m.activeTab == 0 {
+					selected = selectedItem.(item).FileInfo
+				} else {
+					selected = selectedItem.(topItem).FileInfo
+				}
 				if selected.Name != "." {
 					m.deleteTarget = &selected
 					m.deleting = false
@@ -504,22 +619,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
 
 		case "enter":
-			selectedItem := m.list.SelectedItem()
+			selectedItem := activeList.SelectedItem()
 			if selectedItem != nil {
-				selected := selectedItem.(item).FileInfo
-				if selected.IsDir && selected.Name != "." {
-					m.history = append(m.history, m.path)
-					newPath := selected.Path
-					if cached, ok := m.dirCache[newPath]; ok {
+				if m.activeTab == 0 {
+					selected := selectedItem.(item).FileInfo
+					if selected.IsDir && selected.Name != "." {
+						m.history = append(m.history, m.path)
+						newPath := selected.Path
+						if cached, ok := m.dirCache[newPath]; ok {
+							m.path = newPath
+							m.setItems(cached)
+							return m, nil
+						}
 						m.path = newPath
+						m.setItems(analyzer.Result{})
+						m.loading = true
+						m.scannedPaths = nil
+						m.progressChan = make(chan string, 100)
+						return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
+					}
+				} else {
+					selected := selectedItem.(topItem).FileInfo
+					parentDir := filepath.Dir(selected.Path)
+					m.history = append(m.history, m.path)
+					m.activeTab = 0 // Switch back to Directory tab
+
+					if cached, ok := m.dirCache[parentDir]; ok {
+						m.path = parentDir
 						m.setItems(cached)
+						m.selectFileInList(selected.Path)
 						return m, nil
 					}
-					m.path = newPath
+					m.path = parentDir
 					m.setItems(analyzer.Result{})
 					m.loading = true
 					m.scannedPaths = nil
 					m.progressChan = make(chan string, 100)
+					m.targetFileToSelect = selected.Path
 					return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
 				}
 			}
@@ -577,7 +713,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	if m.activeTab == 0 {
+		m.list, cmd = m.list.Update(msg)
+	} else {
+		m.topList, cmd = m.topList.Update(msg)
+	}
 	return m, cmd
 }
 
@@ -625,6 +765,36 @@ func (m *model) setItems(res analyzer.Result) {
 	m.list.SetItems(items)
 	m.list.ResetSelected()
 	m.list.ResetFilter()
+
+	// Update top files list
+	var topItems []list.Item
+	for _, f := range res.TopFiles {
+		rel, err := filepath.Rel(m.path, f.Path)
+		if err != nil {
+			rel = f.Name
+		}
+		topItems = append(topItems, topItem{
+			FileInfo: f,
+			relPath:  rel,
+		})
+	}
+	m.topList.SetItems(topItems)
+	m.topList.ResetSelected()
+	m.topList.ResetFilter()
+
+	if m.targetFileToSelect != "" {
+		m.selectFileInList(m.targetFileToSelect)
+		m.targetFileToSelect = ""
+	}
+}
+
+func (m *model) selectFileInList(filePath string) {
+	for idx, listItem := range m.list.Items() {
+		if i, ok := listItem.(item); ok && i.Path == filePath {
+			m.list.Select(idx)
+			break
+		}
+	}
 }
 
 func (m model) View() string {
@@ -723,16 +893,50 @@ func (m model) View() string {
 		}
 		var leftPane strings.Builder
 		leftPane.WriteString(renderBreadcrumb(m.path, leftWidth) + "\n\n")
-		leftPane.WriteString(m.list.View())
+
+		// Render Tab bar
+		var dirTab, topTab string
+		if m.activeTab == 0 {
+			dirTab = activeTabStyle.Render("📁 Directory")
+			topTab = inactiveTabStyle.Render("🔍 Top Files")
+		} else {
+			dirTab = inactiveTabStyle.Render("📁 Directory")
+			topTab = activeTabStyle.Render("🔍 Top Files")
+		}
+		tabBar := lipgloss.JoinHorizontal(lipgloss.Top, dirTab, topTab)
+		leftPane.WriteString(tabBar + "\n\n")
+
+		if m.activeTab == 0 {
+			leftPane.WriteString(m.list.View())
+		} else {
+			leftPane.WriteString(m.topList.View())
+		}
 
 		var rightPane strings.Builder
-		selectedItem := m.list.SelectedItem()
+		activeList := &m.list
+		if m.activeTab == 1 {
+			activeList = &m.topList
+		}
+		selectedItem := activeList.SelectedItem()
 		if selectedItem != nil {
-			selected := selectedItem.(item).FileInfo
+			var selected analyzer.FileInfo
+			if m.activeTab == 0 {
+				selected = selectedItem.(item).FileInfo
+			} else {
+				selected = selectedItem.(topItem).FileInfo
+			}
 			rightPane.WriteString(lipgloss.NewStyle().Bold(true).Render("Details") + "\n\n")
 			rightPane.WriteString(fmt.Sprintf("Name: %s\n", selected.Name))
 			rightPane.WriteString(fmt.Sprintf("Size: %s\n", formatSize(selected.Size)))
 			rightPane.WriteString(fmt.Sprintf("Type: %s\n", getType(selected)))
+
+			if m.activeTab == 1 {
+				rel, err := filepath.Rel(m.path, selected.Path)
+				if err != nil {
+					rel = selected.Path
+				}
+				rightPane.WriteString(fmt.Sprintf("Path: %s\n", rel))
+			}
 
 			if selected.IsDir {
 				availableHeight := m.list.Height() - 7
