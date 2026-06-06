@@ -54,7 +54,42 @@ var (
 	crumbStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C"))
 	crumbSep      = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C6C6C")).Render(" / ")
 	crumbActive   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Bold(true)
+
+	// Dialog styles
+	dialogStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#FF5F56")).
+			Padding(1, 2).
+			Align(lipgloss.Center)
+
+	dialogTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FF5F56")).
+				MarginBottom(1)
+
+	dialogWarningStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FF5F56")).
+				Bold(true)
+
+	activeBtnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Background(lipgloss.Color("#7D56F4")).
+			Padding(0, 2).
+			Bold(true)
+
+	activeConfirmBtnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Background(lipgloss.Color("#FF5F56")).
+			Padding(0, 2).
+			Bold(true)
+
+	inactiveBtnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#888888")).
+			Background(lipgloss.Color("#333333")).
+			Padding(0, 2)
 )
+
+var removeAll = os.RemoveAll
 
 type item struct {
 	analyzer.FileInfo
@@ -69,6 +104,7 @@ type keyMap struct {
 	Refresh key.Binding
 	Filter  key.Binding
 	Quit    key.Binding
+	Delete  key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -78,12 +114,12 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter, k.Back},
-		{k.Refresh, k.Filter, k.Quit},
+		{k.Refresh, k.Filter, k.Quit, k.Delete},
 	}
 }
 
 func (k keyMap) BrowsingHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Refresh, k.Filter, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Delete, k.Refresh, k.Filter, k.Quit}
 }
 
 func (k keyMap) ScanningHelp(hasHistory bool) []key.Binding {
@@ -125,6 +161,34 @@ var keys = keyMap{
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q", "quit"),
+	),
+	Delete: key.NewBinding(
+		key.WithKeys("d"),
+		key.WithHelp("d", "delete"),
+	),
+}
+
+var confirmKeys = struct {
+	Toggle  key.Binding
+	Select  key.Binding
+	Confirm key.Binding
+	Cancel  key.Binding
+}{
+	Toggle: key.NewBinding(
+		key.WithKeys("left", "right", "h", "l", "tab"),
+		key.WithHelp("←/→/tab", "toggle"),
+	),
+	Select: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "select"),
+	),
+	Confirm: key.NewBinding(
+		key.WithKeys("y"),
+		key.WithHelp("y", "confirm"),
+	),
+	Cancel: key.NewBinding(
+		key.WithKeys("n", "esc"),
+		key.WithHelp("n/esc", "cancel"),
 	),
 }
 
@@ -215,6 +279,9 @@ type model struct {
 	oneFileSystem bool
 	errorsCount   int64 // Track permission/access errors in currently viewed path
 	errorsPtr     *int64 // Pointer to the errors count passed to the analyzer
+	deleteTarget          *analyzer.FileInfo
+	deleting              bool
+	confirmDeleteSelected bool
 }
 
 type analyzeMsg struct {
@@ -222,6 +289,16 @@ type analyzeMsg struct {
 	result analyzer.Result
 }
 
+type deleteResultMsg struct {
+	err error
+}
+
+func deleteTargetCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		err := removeAll(path)
+		return deleteResultMsg{err: err}
+	}
+}
 
 type progressMsg string
 
@@ -298,6 +375,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
+	case deleteResultMsg:
+		m.deleting = false
+		if msg.err != nil {
+			m.err = msg.err
+			m.deleteTarget = nil
+			return m, nil
+		}
+		path := m.deleteTarget.Path
+		m.deleteTarget = nil
+		m.invalidateCache(path)
+		m.loading = true
+		m.scannedPaths = nil
+		m.progressChan = make(chan string, 100)
+		return m, tea.Batch(m.startScan(m.path), m.waitForProgress(m.progressChan))
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -323,6 +415,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		}
+
+		if m.deleteTarget != nil {
+			if m.deleting {
+				return m, nil
+			}
+			switch msg.String() {
+			case "left", "right", "h", "l", "tab":
+				m.confirmDeleteSelected = !m.confirmDeleteSelected
+				return m, nil
+			case "enter":
+				if m.confirmDeleteSelected {
+					m.deleting = true
+					return m, deleteTargetCmd(m.deleteTarget.Path)
+				} else {
+					m.deleteTarget = nil
+					return m, nil
+				}
+			case "y", "Y":
+				m.deleting = true
+				return m, deleteTargetCmd(m.deleteTarget.Path)
+			case "n", "N", "esc":
+				m.deleteTarget = nil
+				return m, nil
+			}
+			return m, nil
 		}
 
 		if m.loading {
@@ -364,6 +482,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(msg)
 			return m, cmd
+
+		case "d":
+			selectedItem := m.list.SelectedItem()
+			if selectedItem != nil {
+				selected := selectedItem.(item).FileInfo
+				if selected.Name != "." {
+					m.deleteTarget = &selected
+					m.deleting = false
+					m.confirmDeleteSelected = false
+					return m, nil
+				}
+			}
+			return m, nil
 
 		case "r":
 			m.loading = true
@@ -507,7 +638,57 @@ func (m model) View() string {
 	var body string
 	var footer string
 
-	if m.loading {
+	if m.deleteTarget != nil {
+		var footerBuilder strings.Builder
+		if m.deleting {
+			footerBuilder.WriteString("\n" + m.help.ShortHelpView([]key.Binding{}))
+		} else {
+			footerBuilder.WriteString("\n" + m.help.ShortHelpView([]key.Binding{confirmKeys.Toggle, confirmKeys.Select, confirmKeys.Confirm, confirmKeys.Cancel}))
+		}
+		footer = footerBuilder.String()
+
+		footerHeight := lipgloss.Height(footer)
+		bodyHeight := m.height - headerHeight - footerHeight
+		if bodyHeight < 1 {
+			bodyHeight = 1
+		}
+
+		var dialogContent string
+		if m.deleting {
+			dialogContent = fmt.Sprintf(
+				"%s\n\nDeleting:\n%s\n\n%s",
+				dialogTitleStyle.Render("Deleting..."),
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#FAFAFA")).Render(truncate(m.deleteTarget.Path, m.width-10)),
+				m.spinner.View(),
+			)
+		} else {
+			var confirmBtn, cancelBtn string
+			if m.confirmDeleteSelected {
+				confirmBtn = activeConfirmBtnStyle.Render("Confirm")
+				cancelBtn = inactiveBtnStyle.Render("Cancel")
+			} else {
+				confirmBtn = inactiveBtnStyle.Render("Confirm")
+				cancelBtn = activeBtnStyle.Render("Cancel")
+			}
+			buttons := lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				confirmBtn,
+				"   ",
+				cancelBtn,
+			)
+
+			dialogContent = fmt.Sprintf(
+				"%s\n\nAre you sure you want to delete:\n%s\n\n%s\n\n%s",
+				dialogTitleStyle.Render("Confirm Deletion"),
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#FAFAFA")).Render(truncate(m.deleteTarget.Path, m.width-10)),
+				dialogWarningStyle.Render("This action cannot be undone!"),
+				buttons,
+			)
+		}
+
+		dialogBox := dialogStyle.Render(dialogContent)
+		body = lipgloss.Place(m.width-4, bodyHeight, lipgloss.Center, lipgloss.Center, dialogBox)
+	} else if m.loading {
 		var s strings.Builder
 		breadcrumbWidth := m.width - 6
 		if breadcrumbWidth < 20 {
