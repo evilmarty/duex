@@ -802,6 +802,7 @@ func TestParseFlags(t *testing.T) {
 		wantOneFileSystem bool
 		wantShowHelp      bool
 		wantShowVersion   bool
+		wantMinSize       int64
 		wantErr           bool
 	}{
 		{
@@ -886,17 +887,49 @@ func TestParseFlags(t *testing.T) {
 			args:    []string{"path1", "path2"},
 			wantErr: true,
 		},
+		{
+			name:              "min size short flag",
+			args:              []string{"-m", "50mb"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantMinSize:       50 * 1024 * 1024,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:              "min size long flag",
+			args:              []string{"--min-size", "2gb"},
+			wantPath:          ".",
+			wantOneFileSystem: true,
+			wantMinSize:       2 * 1024 * 1024 * 1024,
+			wantShowHelp:      false,
+			wantShowVersion:   false,
+			wantErr:           false,
+		},
+		{
+			name:    "min size invalid",
+			args:    []string{"-m", "invalid"},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			path, oneFS, help, version, err := parseFlags(&buf, tt.args)
+			path, oneFS, minSize, help, version, err := parseFlags(&buf, tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseFlags() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
 				return
+			}
+			expectedMinSize := tt.wantMinSize
+			if expectedMinSize == 0 {
+				expectedMinSize = 100 * 1024 * 1024
+			}
+			if minSize != expectedMinSize {
+				t.Errorf("minSize = %d, want %d", minSize, expectedMinSize)
 			}
 			if path != tt.wantPath {
 				t.Errorf("path = %q, want %q", path, tt.wantPath)

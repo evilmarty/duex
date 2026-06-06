@@ -35,7 +35,7 @@ func TestAnalyze(t *testing.T) {
 		t.Fatalf("Failed to create file2: %v", err)
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestAnalyzeHardLinks(t *testing.T) {
 		t.Skip("Hard links not supported on this filesystem")
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 		t.Fatalf("Failed to create file with long extension: %v", err)
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestAnalyzeLongExtension(t *testing.T) {
 	os.Mkdir(subDir, 0755)
 	os.WriteFile(filepath.Join(subDir, "file"+longExt), content, 0644)
 
-	result, _ = Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	result, _ = Analyze(context.Background(), tmpDir, nil, nil, false, nil, 0)
 	for _, f := range result.Files {
 		if f.Name == "sub" {
 			for _, b := range f.Breakdown {
@@ -203,7 +203,7 @@ func TestAnalyzeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err = Analyze(ctx, tmpDir, nil, nil, false, nil)
+	_, err = Analyze(ctx, tmpDir, nil, nil, false, nil, 0)
 	if err != context.Canceled {
 		t.Errorf("Expected context.Canceled error, got: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestAnalyzeProgress(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("data"), 0644)
 
 	progress := make(chan string, 10)
-	_, err = Analyze(context.Background(), tmpDir, progress, nil, false, nil)
+	_, err = Analyze(context.Background(), tmpDir, progress, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestAnalyzeProgress(t *testing.T) {
 
 func TestAnalyzeErrors(t *testing.T) {
 	// Create non-existent directory
-	_, err := Analyze(context.Background(), "/non/existent/path", nil, nil, false, nil)
+	_, err := Analyze(context.Background(), "/non/existent/path", nil, nil, false, nil, 0)
 	if err == nil {
 		t.Error("Expected error for non-existent directory, got nil")
 	}
@@ -279,7 +279,7 @@ func TestAnalyzeWithCache(t *testing.T) {
 	}
 
 	// This should hit the cache instead of scanning subDir
-	result, err := Analyze(context.Background(), tmpDir, nil, cache, false, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, cache, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestDirSizeWithCache(t *testing.T) {
 	}
 
 	// Walk parentDir. It should encounter childDir and use cache.
-	size, breakdown, _, _ := DirSize(context.Background(), parentDir, nil, nil, cache, false, 0, nil)
+	size, breakdown, _, _ := DirSize(context.Background(), parentDir, nil, nil, cache, false, 0, nil, 0)
 	if size != 12345 {
 		t.Errorf("Expected size 12345 from cache, got %d", size)
 	}
@@ -333,7 +333,7 @@ func TestDirSizeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	size, _, _, _ := DirSize(ctx, tmpDir, nil, nil, nil, false, 0, nil)
+	size, _, _, _ := DirSize(ctx, tmpDir, nil, nil, nil, false, 0, nil, 0)
 	if size != 0 {
 		t.Errorf("Expected 0 size on canceled context, got %d", size)
 	}
@@ -356,7 +356,7 @@ func TestAnalyzeOneFileSystem(t *testing.T) {
 		t.Fatalf("Failed to create file1: %v", err)
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil, true, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, true, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestAnalyzeOneFileSystemBoundary(t *testing.T) {
 		return stats
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil, true, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, true, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestDirSizeOneFileSystemBoundary(t *testing.T) {
 		return stats
 	}
 
-	result, err := Analyze(context.Background(), tmpDir, nil, nil, true, nil)
+	result, err := Analyze(context.Background(), tmpDir, nil, nil, true, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestAnalyzeWithErrorsCount(t *testing.T) {
 	// Restore permissions on defer so cleanup doesn't fail
 	defer os.Chmod(subDir, 0755)
 
-	res, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	res, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestAnalyzeWithErrorsCountRealTime(t *testing.T) {
 	defer os.Chmod(subDir, 0755)
 
 	var errorsCount int64
-	_, err = Analyze(context.Background(), tmpDir, nil, nil, false, &errorsCount)
+	_, err = Analyze(context.Background(), tmpDir, nil, nil, false, &errorsCount, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 	defer os.Chmod(lockedSub1, 0755)
 
 	var errorsCount1 int64
-	res1, err1 := Analyze(context.Background(), tmpDir1, nil, nil, false, &errorsCount1)
+	res1, err1 := Analyze(context.Background(), tmpDir1, nil, nil, false, &errorsCount1, 0)
 	if err1 != nil {
 		t.Fatalf("Analyze failed: %v", err1)
 	}
@@ -593,7 +593,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 
 	var errorsCount2 int64
 	var seen2 sync.Map
-	_, _, errs2, _ := DirSize(context.Background(), tmpDir2, nil, &seen2, nil, true, rootDev2, &errorsCount2)
+	_, _, errs2, _ := DirSize(context.Background(), tmpDir2, nil, &seen2, nil, true, rootDev2, &errorsCount2, 0)
 
 	if errorsCount2 < 1 {
 		t.Errorf("Expected at least 1 error count for unreadable subdirectory in DirSize, got %d", errorsCount2)
@@ -621,7 +621,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir3, "file.txt"), []byte("data"), 0644)
 
 	var errorsCount3 int64
-	_, _, errs3, _ := DirSize(context.Background(), tmpDir3, nil, nil, nil, false, 0, &errorsCount3)
+	_, _, errs3, _ := DirSize(context.Background(), tmpDir3, nil, nil, nil, false, 0, &errorsCount3, 0)
 
 	if errorsCount3 < 1 {
 		t.Errorf("Expected at least 1 error count for unreadable subdirectory in DirSize, got %d", errorsCount3)
@@ -653,7 +653,7 @@ func TestAnalyzeAdvancedEdgeCases(t *testing.T) {
 		},
 	}
 	var errorsCount4 int64
-	_, _, errs4, _ := DirSize(context.Background(), subDir4, nil, nil, cache, false, 0, &errorsCount4)
+	_, _, errs4, _ := DirSize(context.Background(), subDir4, nil, nil, cache, false, 0, &errorsCount4, 0)
 	if errorsCount4 != 5 {
 		t.Errorf("Expected cached errors count 5 to be accumulated, got %d", errorsCount4)
 	}
@@ -707,7 +707,7 @@ func TestDirSizeConcurrentDeep(t *testing.T) {
 
 	progress := make(chan string, 256)
 	var seen sync.Map
-	size, breakdown, errs, _ := DirSize(context.Background(), root, progress, &seen, nil, false, 0, nil)
+	size, breakdown, errs, _ := DirSize(context.Background(), root, progress, &seen, nil, false, 0, nil, 0)
 
 	if errs != 0 {
 		t.Errorf("expected 0 errors, got %d", errs)
@@ -762,7 +762,7 @@ func BenchmarkDirSize(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var seen sync.Map
-		_, _, _, _ = DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
+		_, _, _, _ = DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil, 0)
 	}
 }
 
@@ -797,7 +797,7 @@ func TestAnalyzeBreakdownOrder(t *testing.T) {
 		}
 	}
 
-	res, err := Analyze(context.Background(), root, nil, nil, false, nil)
+	res, err := Analyze(context.Background(), root, nil, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -836,7 +836,7 @@ func TestDirSizePreCancelledContext(t *testing.T) {
 
 	var seen sync.Map
 	// Should not hang or panic even with a pre-cancelled context.
-	_, _, _, _ = DirSize(ctx, root, nil, &seen, nil, false, 0, nil)
+	_, _, _, _ = DirSize(ctx, root, nil, &seen, nil, false, 0, nil, 0)
 }
 
 // TestDirSizeOneFileSystemInfoError covers the entry.Info() error branch inside
@@ -857,7 +857,7 @@ func TestDirSizeBreakdownOrder(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "c.log"), make([]byte, 256), 0644)
 
 	var seen sync.Map
-	_, breakdown, _, _ := DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil)
+	_, breakdown, _, _ := DirSize(context.Background(), root, nil, &seen, nil, false, 0, nil, 0)
 
 	if len(breakdown) < 2 {
 		t.Fatalf("expected at least 2 breakdown entries, got %d", len(breakdown))
@@ -888,7 +888,7 @@ func TestAnalyzePreCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel so ctx.Err() != nil immediately
 
-	res, err := Analyze(ctx, root, nil, nil, false, nil)
+	res, err := Analyze(ctx, root, nil, nil, false, nil, 0)
 	// Should return the cancellation error, not a filesystem error.
 	if err == nil {
 		// Also acceptable: the loop might not iterate at all if the OS returns
@@ -900,10 +900,10 @@ func TestAnalyzePreCancelledContext(t *testing.T) {
 func TestTopFiles(t *testing.T) {
 	// 1. Test insertTopFile
 	var list []FileInfo
-	list = insertTopFile(list, FileInfo{Name: "f3.txt", Size: 30}, 3)
-	list = insertTopFile(list, FileInfo{Name: "f1.txt", Size: 10}, 3)
-	list = insertTopFile(list, FileInfo{Name: "f4.txt", Size: 40}, 3)
-	list = insertTopFile(list, FileInfo{Name: "f2.txt", Size: 20}, 3)
+	list = insertTopFile(list, FileInfo{Name: "f3.txt", Size: 30}, 15)
+	list = insertTopFile(list, FileInfo{Name: "f1.txt", Size: 10}, 15)
+	list = insertTopFile(list, FileInfo{Name: "f4.txt", Size: 40}, 15)
+	list = insertTopFile(list, FileInfo{Name: "f2.txt", Size: 20}, 15)
 
 	if len(list) != 3 {
 		t.Fatalf("expected len 3, got %d", len(list))
@@ -921,11 +921,11 @@ func TestTopFiles(t *testing.T) {
 		{Name: "b1", Size: 90},
 		{Name: "b2", Size: 70},
 	}
-	merged := mergeTopFiles(listA, listB, 3)
-	if len(merged) != 3 {
+	merged := mergeTopFiles(listA, listB)
+	if len(merged) != 4 {
 		t.Fatalf("expected merged len 3, got %d", len(merged))
 	}
-	if merged[0].Name != "a1" || merged[1].Name != "b1" || merged[2].Name != "a2" {
+	if merged[0].Name != "a1" || merged[1].Name != "b1" || merged[2].Name != "a2" || merged[3].Name != "b2" {
 		t.Errorf("incorrect merge order: %v", merged)
 	}
 
@@ -943,7 +943,7 @@ func TestTopFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(subDir, "sub1.txt"), make([]byte, 30000), 0644)
 	os.WriteFile(filepath.Join(subDir, "sub2.txt"), make([]byte, 10000), 0644)
 
-	res, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil)
+	res, err := Analyze(context.Background(), tmpDir, nil, nil, false, nil, 0)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -969,3 +969,39 @@ func TestTopFiles(t *testing.T) {
 	}
 }
 
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+		hasErr   bool
+	}{
+		{"100mb", 100 * 1024 * 1024, false},
+		{"1gb", 1024 * 1024 * 1024, false},
+		{"50kb", 50 * 1024, false},
+		{"100", 100, false},
+		{"100b", 100, false},
+		{"100m", 100 * 1024 * 1024, false},
+		{"100mi", 100 * 1024 * 1024, false},
+		{"100mib", 100 * 1024 * 1024, false},
+		{"   100mb   ", 100 * 1024 * 1024, false},
+		{"", 0, true},
+		{"abc", 0, true},
+		{"100foo", 0, true},
+	}
+
+	for _, tc := range tests {
+		got, err := ParseSize(tc.input)
+		if tc.hasErr {
+			if err == nil {
+				t.Errorf("ParseSize(%q) expected error, got nil", tc.input)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("ParseSize(%q) unexpected error: %v", tc.input, err)
+			}
+			if got != tc.expected {
+				t.Errorf("ParseSize(%q) = %d, expected %d", tc.input, got, tc.expected)
+			}
+		}
+	}
+}

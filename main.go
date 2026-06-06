@@ -364,6 +364,7 @@ type model struct {
 	history            []string
 	help               help.Model
 	oneFileSystem      bool
+	minSize            int64
 	errorsCount        int64 // Track permission/access errors in currently viewed path
 	errorsPtr          *int64 // Pointer to the errors count passed to the analyzer
 	deleteTarget       *analyzer.FileInfo
@@ -419,6 +420,7 @@ func initialModel(path string) model {
 		activeTab:     0,
 		help:          help.New(),
 		oneFileSystem: true,
+		minSize:       100 * 1024 * 1024,
 		errorsPtr:     new(int64),
 		progressChan:  make(chan string, 100),
 	}
@@ -446,7 +448,7 @@ func (m *model) startScan(targetPath string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache, m.oneFileSystem, m.errorsPtr)
+		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache, m.oneFileSystem, m.errorsPtr, m.minSize)
 		if err != nil {
 			return err
 		}
@@ -1123,18 +1125,20 @@ func showHelpWriter(w io.Writer) {
 	printLine("-h, --help", "Show this help message")
 	printLine("-v, --version", "Show application version")
 	printLine("-c, --cross-mounts", "Allow crossing filesystem boundaries")
+	printLine("-m, --min-size", "Minimum file size to include in top files (default: 100mb)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, sectionStyle.Render("Arguments:"))
 	printLine("path", "The directory to scan (defaults to current directory)")
 }
 
-func parseFlags(output io.Writer, args []string) (path string, oneFileSystem bool, showHelp bool, showVersion bool, err error) {
+func parseFlags(output io.Writer, args []string) (path string, oneFileSystem bool, minSize int64, showHelp bool, showVersion bool, err error) {
 	fs := flag.NewFlagSet("duex", flag.ContinueOnError)
 	fs.SetOutput(output)
 
 	var crossMounts, c bool
 	var version, v bool
 	var help, h bool
+	var minSizeStr, mStr string
 
 	fs.BoolVar(&crossMounts, "cross-mounts", false, "Allow crossing filesystem boundaries")
 	fs.BoolVar(&c, "c", false, "Allow crossing filesystem boundaries (alias)")
@@ -1142,6 +1146,8 @@ func parseFlags(output io.Writer, args []string) (path string, oneFileSystem boo
 	fs.BoolVar(&v, "v", false, "Show application version (alias)")
 	fs.BoolVar(&help, "help", false, "Show this help message")
 	fs.BoolVar(&h, "h", false, "Show help message (alias)")
+	fs.StringVar(&minSizeStr, "min-size", "100mb", "Minimum file size to include in top files")
+	fs.StringVar(&mStr, "m", "100mb", "Minimum file size to include in top files (alias)")
 
 	fs.Usage = func() {
 		showHelpWriter(output)
@@ -1149,16 +1155,30 @@ func parseFlags(output io.Writer, args []string) (path string, oneFileSystem boo
 
 	err = fs.Parse(args)
 	if err != nil {
-		return "", false, false, false, err
+		return "", false, 0, false, false, err
 	}
 
 	showHelp = help || h
 	showVersion = version || v
 	oneFileSystem = !(crossMounts || c)
 
+	minSizeStrVal := "100mb"
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "min-size" {
+			minSizeStrVal = minSizeStr
+		} else if f.Name == "m" {
+			minSizeStrVal = mStr
+		}
+	})
+
+	minSize, err = analyzer.ParseSize(minSizeStrVal)
+	if err != nil {
+		return "", false, 0, false, false, fmt.Errorf("invalid size limit: %w", err)
+	}
+
 	parsedArgs := fs.Args()
 	if len(parsedArgs) > 1 {
-		return "", false, false, false, fmt.Errorf("too many arguments provided")
+		return "", false, 0, false, false, fmt.Errorf("too many arguments provided")
 	}
 
 	path = "."
@@ -1166,12 +1186,13 @@ func parseFlags(output io.Writer, args []string) (path string, oneFileSystem boo
 		path = parsedArgs[0]
 	}
 
-	return path, oneFileSystem, showHelp, showVersion, nil
+	return path, oneFileSystem, minSize, showHelp, showVersion, nil
 }
 
 func main() {
-	path, oneFileSystem, showHelpFlag, showVersionFlag, err := parseFlags(os.Stderr, os.Args[1:])
+	path, oneFileSystem, minSize, showHelpFlag, showVersionFlag, err := parseFlags(os.Stderr, os.Args[1:])
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		showHelpWriter(os.Stderr)
 		os.Exit(1)
 	}
@@ -1194,6 +1215,7 @@ func main() {
 
 	m := initialModel(absPath)
 	m.oneFileSystem = oneFileSystem
+	m.minSize = minSize
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
