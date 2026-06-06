@@ -491,22 +491,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		// Calculate dynamic dimensions
-		rightWidth := 40
-		leftWidth := m.width - rightWidth - 6
-		if leftWidth < 20 {
-			leftWidth = 20
-		}
-
-		// Overhead: Header(3), Path(2), Tabs(2), Footer(2), Padding(2) = 11
-		listHeight := m.height - 12
-		if listHeight < 5 {
-			listHeight = 5
-		}
-
-		m.list.SetSize(leftWidth, listHeight)
-		m.topList.SetSize(leftWidth, listHeight)
+		m.updateListSizes()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -739,9 +724,30 @@ func isDescendantOrEqual(parent, child string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+func (m *model) updateListSizes() {
+	rightWidth := 40
+	leftWidth := m.width - rightWidth - 6
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
+
+	overhead := 10
+	if m.errorsCount > 0 {
+		overhead = 12
+	}
+	listHeight := m.height - overhead
+	if listHeight < 5 {
+		listHeight = 5
+	}
+
+	m.list.SetSize(leftWidth, listHeight)
+	m.topList.SetSize(leftWidth, listHeight)
+}
+
 func (m *model) setItems(res analyzer.Result) {
 	m.err = nil
 	m.errorsCount = res.ErrorsCount
+	m.updateListSizes()
 	files := res.Files
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Size > files[j].Size

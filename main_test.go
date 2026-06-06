@@ -167,11 +167,11 @@ func TestUpdateWindowSize(t *testing.T) {
 	if m2.topList.Width() != 54 {
 		t.Errorf("expected topList width of 54, got %d", m2.topList.Width())
 	}
-	if m2.list.Height() != 38 { // 50 - 12 = 38
-		t.Errorf("expected list height of 38, got %d", m2.list.Height())
+	if m2.list.Height() != 40 { // 50 - 10 = 40
+		t.Errorf("expected list height of 40, got %d", m2.list.Height())
 	}
-	if m2.topList.Height() != 38 {
-		t.Errorf("expected topList height of 38, got %d", m2.topList.Height())
+	if m2.topList.Height() != 40 {
+		t.Errorf("expected topList height of 40, got %d", m2.topList.Height())
 	}
 }
 
