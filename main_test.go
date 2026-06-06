@@ -1111,4 +1111,179 @@ func stripANSI(s string) string {
 	return out.String()
 }
 
+func TestDeleteFile(t *testing.T) {
+	// Mock removeAll
+	var deletedPath string
+	var deleteErr error
+	oldRemoveAll := removeAll
+	defer func() { removeAll = oldRemoveAll }()
+	removeAll = func(path string) error {
+		deletedPath = path
+		return deleteErr
+	}
+
+	// 1. Initial setup of the model with items
+	m := initialModel("/my/test/path")
+	m.loading = false
+	m.width = 80
+	m.height = 24
+
+	// Populate list items: "." and a file "file.txt"
+	m.list.SetItems([]list.Item{
+		item{analyzer.FileInfo{Name: ".", Path: "/my/test/path", IsDir: true}},
+		item{analyzer.FileInfo{Name: "file.txt", Path: "/my/test/path/file.txt", Size: 100}},
+	})
+	m.list.ResetSelected() // selects "." initially
+
+	// 2. Pressing "d" on "." should be ignored (since we block deleting ".")
+	msgD := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	newModel, cmd := m.Update(msgD)
+	m2 := newModel.(model)
+	if m2.deleteTarget != nil {
+		t.Error("expected deleteTarget to be nil when pressing d on '.'")
+	}
+	if cmd != nil {
+		t.Error("expected no command when trying to delete '.'")
+	}
+
+	// 3. Move cursor down to "file.txt" and press "d"
+	m.list.Select(1) // select "file.txt"
+	newModel, cmd = m.Update(msgD)
+	m2 = newModel.(model)
+	if m2.deleteTarget == nil {
+		t.Fatal("expected deleteTarget to be set after pressing d on 'file.txt'")
+	}
+	if m2.deleteTarget.Name != "file.txt" {
+		t.Errorf("expected deleteTarget name to be 'file.txt', got %s", m2.deleteTarget.Name)
+	}
+	if m2.deleting {
+		t.Error("expected deleting to be false initially")
+	}
+	if m2.confirmDeleteSelected {
+		t.Error("expected confirmDeleteSelected to default to false (Cancel)")
+	}
+	if cmd != nil {
+		t.Error("expected no command immediately after pressing d")
+	}
+
+	// Check View in confirmation state
+	viewStr := m2.View()
+	plainView := stripANSI(viewStr)
+	if !strings.Contains(plainView, "Confirm Deletion") {
+		t.Error("expected view to contain 'Confirm Deletion'")
+	}
+	if !strings.Contains(plainView, "/my/test/path/file.txt") {
+		t.Error("expected view to contain deleted file path")
+	}
+	if !strings.Contains(plainView, "Confirm") || !strings.Contains(plainView, "Cancel") {
+		t.Error("expected view to contain Confirm and Cancel buttons")
+	}
+	if !strings.Contains(plainView, "toggle") || !strings.Contains(plainView, "select") {
+		t.Error("expected help views for toggle and select keys")
+	}
+
+	// 4. Test keyboard toggling (left/right/tab)
+	msgTab := tea.KeyMsg{Type: tea.KeyTab}
+	newModelToggle, cmdToggle := m2.Update(msgTab)
+	mToggle := newModelToggle.(model)
+	if !mToggle.confirmDeleteSelected {
+		t.Error("expected confirmDeleteSelected to toggle to true (Confirm)")
+	}
+	if cmdToggle != nil {
+		t.Error("expected no command on toggle")
+	}
+
+	// Toggle back to Cancel
+	newModelToggle2, _ := mToggle.Update(msgTab)
+	mToggle2 := newModelToggle2.(model)
+	if mToggle2.confirmDeleteSelected {
+		t.Error("expected confirmDeleteSelected to toggle back to false (Cancel)")
+	}
+
+	// 5. Pressing enter on Cancel defaults to canceling deletion
+	msgEnter := tea.KeyMsg{Type: tea.KeyEnter}
+	newModelEnterCancel, cmdEnterCancel := mToggle2.Update(msgEnter)
+	mEnterCancel := newModelEnterCancel.(model)
+	if mEnterCancel.deleteTarget != nil {
+		t.Error("expected deleteTarget to be cleared on Cancel enter")
+	}
+	if cmdEnterCancel != nil {
+		t.Error("expected no command when canceling deletion via enter")
+	}
+
+	// 6. Confirm deletion (press 'y' shortcut)
+	msgY := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}
+	newModelConfirm, cmdConfirm := m2.Update(msgY)
+	mConfirm := newModelConfirm.(model)
+	if !mConfirm.deleting {
+		t.Error("expected deleting state to be true after confirmation")
+	}
+	if cmdConfirm == nil {
+		t.Fatal("expected a delete command to be returned")
+	}
+
+	// Check View in active deletion state
+	viewStrConfirm := mConfirm.View()
+	plainViewConfirm := stripANSI(viewStrConfirm)
+	if !strings.Contains(plainViewConfirm, "Deleting...") {
+		t.Error("expected view to contain 'Deleting...'")
+	}
+
+	// Execute command to simulate async deletion
+	msgResult := cmdConfirm()
+	delRes, ok := msgResult.(deleteResultMsg)
+	if !ok {
+		t.Fatalf("expected deleteResultMsg, got %T", msgResult)
+	}
+	if delRes.err != nil {
+		t.Errorf("expected no error in deleteResultMsg, got %v", delRes.err)
+	}
+
+	// Feed deleteResultMsg back into model
+	newModelAfterDel, cmdAfterDel := mConfirm.Update(delRes)
+	mAfterDel := newModelAfterDel.(model)
+	if mAfterDel.deleting {
+		t.Error("expected deleting to be false after result handled")
+	}
+	if mAfterDel.deleteTarget != nil {
+		t.Error("expected deleteTarget to be nil after result handled")
+	}
+	if !mAfterDel.loading {
+		t.Error("expected model to trigger scan/loading after successful deletion")
+	}
+	if cmdAfterDel == nil {
+		t.Fatal("expected batch scan commands after deletion")
+	}
+	if deletedPath != "/my/test/path/file.txt" {
+		t.Errorf("expected removeAll to be called with '/my/test/path/file.txt', got %q", deletedPath)
+	}
+
+	// 7. Toggle to Confirm and press Enter to confirm deletion
+	mToggle.deleting = false
+	newModelEnterConfirm, cmdEnterConfirm := mToggle.Update(msgEnter)
+	mEnterConfirm := newModelEnterConfirm.(model)
+	if !mEnterConfirm.deleting {
+		t.Error("expected deleting state to be true after confirming via Enter key")
+	}
+	if cmdEnterConfirm == nil {
+		t.Fatal("expected a delete command to be returned on Confirm enter")
+	}
+
+	// 8. Test deletion failure
+	deleteErr = errors.New("permission denied")
+	newModelConfirmErr, cmdConfirmErr := m2.Update(msgY)
+	mConfirmErr := newModelConfirmErr.(model)
+	msgResultErr := cmdConfirmErr()
+	newModelAfterDelErr, cmdAfterDelErr := mConfirmErr.Update(msgResultErr)
+	mAfterDelErr := newModelAfterDelErr.(model)
+	if mAfterDelErr.err != deleteErr {
+		t.Errorf("expected model error to be set to %v, got %v", deleteErr, mAfterDelErr.err)
+	}
+	if mAfterDelErr.deleteTarget != nil {
+		t.Error("expected deleteTarget to be cleared on deletion error")
+	}
+	if cmdAfterDelErr != nil {
+		t.Error("expected no command returned on error")
+	}
+}
 
