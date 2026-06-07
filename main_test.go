@@ -91,6 +91,9 @@ func TestTruncate(t *testing.T) {
 		{"hello world", 8, "hello..."},
 		{"hello world", 3, "..."},
 		{"abc", 2, "..."},
+		{"こんにちは", 8, "こん..."},
+		{"こんにちは", 10, "こんにちは"},
+		{"こんにちは", 9, "こんに..."},
 	}
 
 	for _, tt := range tests {
@@ -1108,6 +1111,19 @@ func TestRenderBreadcrumb(t *testing.T) {
 			path:     "/singledir",
 			width:    80,
 			wantSegs: []string{"singledir"},
+		},
+		{
+			name:     "multi-byte directory path renders correctly without misaligned truncation",
+			path:     "/usr/こんにちは/bin",
+			width:    80,
+			wantSegs: []string{"usr", "こんにちは", "bin"},
+		},
+		{
+			name:     "multi-byte directory path truncates correctly with visual cell width limit",
+			path:     "/usr/こんにちは/bin",
+			width:    18,
+			wantSegs: []string{"bin"},
+			wantNot:  []string{"こんにちは"},
 		},
 	}
 

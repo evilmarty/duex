@@ -923,10 +923,35 @@ func TestTopFiles(t *testing.T) {
 	}
 	merged := mergeTopFiles(listA, listB)
 	if len(merged) != 4 {
-		t.Fatalf("expected merged len 3, got %d", len(merged))
+		t.Fatalf("expected merged len 4, got %d", len(merged))
 	}
 	if merged[0].Name != "a1" || merged[1].Name != "b1" || merged[2].Name != "a2" || merged[3].Name != "b2" {
 		t.Errorf("incorrect merge order: %v", merged)
+	}
+
+	// 2b. Test capping to maxTopFiles
+	var largeList []FileInfo
+	for i := 0; i < 600; i++ {
+		largeList = insertTopFile(largeList, FileInfo{Name: fmt.Sprintf("file%d", i), Size: int64(i + 1)}, 0)
+	}
+	if len(largeList) != 500 {
+		t.Errorf("expected list to be capped at 500, got %d", len(largeList))
+	}
+	if largeList[499].Size != 101 {
+		t.Errorf("expected smallest size in top 500 to be 101, got %d", largeList[499].Size)
+	}
+
+	listX := make([]FileInfo, 400)
+	for i := range listX {
+		listX[i] = FileInfo{Name: "x", Size: 100}
+	}
+	listY := make([]FileInfo, 400)
+	for i := range listY {
+		listY[i] = FileInfo{Name: "y", Size: 90}
+	}
+	mergedLarge := mergeTopFiles(listX, listY)
+	if len(mergedLarge) != 500 {
+		t.Errorf("expected merged list to be capped at 500, got %d", len(mergedLarge))
 	}
 
 	// 3. Test recursive collection via Analyze
