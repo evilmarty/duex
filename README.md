@@ -17,7 +17,9 @@
 * **Fast & Concurrent**: Uses Go routines for rapid, non-blocking directory traversal.
 * **Real-time Progress**: Visual feedback with an animated spinner and scrolling file list during heavy scans.
 * **Instant Breakdowns**: Automatically computes and displays a file extension breakdown for directories.
+* **Top Files View**: Switch tabs to view the largest files in the scanned tree (capped at 500 entries for speed).
 * **Filter & Search**: Quickly find specific files in large directories.
+* **File Deletion**: Safely delete files or directories directly from the TUI with confirmation prompts.
 * **Safe Navigation**: Cancel long-running scans instantly with `esc`.
 
 ## Installation
@@ -76,6 +78,8 @@ Or provide a specific path to scan:
 | :--- | :--- |
 | `-h`, `--help` | Show usage instructions |
 | `-v`, `--version` | Show application version |
+| `-c`, `--cross-mounts` | Allow crossing filesystem boundaries |
+| `-m`, `--min-size` | Minimum file size to include in top files (default: 100mb) |
 
 ### Keyboard Shortcuts
 
@@ -83,11 +87,13 @@ Or provide a specific path to scan:
 | :--- | :--- |
 | `↑` / `k` | Move cursor up |
 | `↓` / `j` | Move cursor down |
-| `enter` | Open selected directory |
+| `enter` | Open selected directory / Jump to file's location |
 | `backspace` | Go up to parent directory |
 | `esc` | Cancel active scan / Go back |
 | `r` | Refresh (rescan current directory) |
 | `/` | Filter files in current directory |
+| `tab` | Switch views (Directory / Top Files) |
+| `d` | Delete selected file or directory |
 | `q` / `ctrl+c`| Quit application |
 
 ## Testing and Coverage
