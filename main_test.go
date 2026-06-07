@@ -1410,3 +1410,40 @@ func TestTabsFeature(t *testing.T) {
 		t.Errorf("expected list index to be 1 (selected sub1.txt), got %d", m3.list.Index())
 	}
 }
+
+func TestEmptyTopFilesViewRenderingWidth(t *testing.T) {
+	m := initialModel("/my/test/path")
+	m.width = 100
+	m.height = 30
+	m.loading = false
+	m.activeTab = 1 // Top Files tab
+	m.updateListSizes()
+
+	// Ensure there are no top files
+	mockResult := analyzer.Result{
+		Files:     []analyzer.FileInfo{},
+		TotalSize: 0,
+		TopFiles:  []analyzer.FileInfo{},
+	}
+	m.setItems(mockResult)
+
+	viewStr := m.View()
+	// Split view into lines
+	lines := strings.Split(viewStr, "\n")
+
+	foundNoItems := false
+	for _, line := range lines {
+		plain := stripAnsi(line)
+		if strings.Contains(plain, "No items") {
+			foundNoItems = true
+			// The list view is styled to leftWidth = m.width - 40 - 6 = 54.
+			// When padded with space, the plain text line should have at least 54 chars.
+			if len(plain) < 54 {
+				t.Errorf("expected line containing 'No items' to be at least 54 chars wide, got %d: %q", len(plain), plain)
+			}
+		}
+	}
+	if !foundNoItems {
+		t.Error("expected to find 'No items' in the empty Top Files view")
+	}
+}
