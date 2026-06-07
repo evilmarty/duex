@@ -17,6 +17,8 @@ Bubble Tea is built on the Model-View-Update architecture. To ensure consistency
 
 2. **Dimension Updates**: When a `tea.WindowSizeMsg` is received, propagate the dimensions to all sub-components using their respective `SetSize` or `SetHeight` methods within the `Update` handler.
 
+3. **Command Parameter Thread Safety (Async Commands)**: When launching background commands (`tea.Cmd`), they execute in separate goroutines. If a command needs to access model state (such as cache maps, history slices, etc.), **always copy or snapshot that data on the main thread first** and pass the copy to the command. Standard Go maps and slices are not safe for concurrent read/write and will panic or race if the main `Update` loop mutates them while the command is running in the background.
+
 ## Visual Design & Aesthetics
 
 Follow these principles when styling with Lip Gloss to achieve a premium, modern terminal aesthetic:
