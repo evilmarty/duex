@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 var (
@@ -447,8 +448,15 @@ func (m *model) startScan(targetPath string) tea.Cmd {
 		atomic.StoreInt64(m.errorsPtr, 0)
 	}
 
+	// Copy the cache so that the background goroutine works on a snapshot,
+	// preventing data races with main loop mutations or subsequent scans.
+	cacheCopy := make(map[string]analyzer.Result, len(m.dirCache))
+	for k, v := range m.dirCache {
+		cacheCopy[k] = v
+	}
+
 	return func() tea.Msg {
-		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, m.dirCache, m.oneFileSystem, m.errorsPtr, m.minSize)
+		res, err := analyzer.Analyze(ctx, targetPath, m.progressChan, cacheCopy, m.oneFileSystem, m.errorsPtr, m.minSize)
 		if err != nil {
 			return err
 		}
@@ -990,13 +998,7 @@ func (m model) View() string {
 }
 
 func truncate(s string, max int) string {
-	if max < 4 {
-		return "..."
-	}
-	if len(s) > max {
-		return s[:max-3] + "..."
-	}
-	return s
+	return runewidth.Truncate(s, max, "...")
 }
 
 // renderBreadcrumb renders m.path as a styled breadcrumb trail that fits within
@@ -1031,7 +1033,7 @@ func renderBreadcrumb(path string, width int) string {
 	totalLen := func(segs []string) int {
 		n := 0
 		for i, s := range segs {
-			n += len(s)
+			n += runewidth.StringWidth(s)
 			if i < len(segs)-1 {
 				n += sepLen
 			}

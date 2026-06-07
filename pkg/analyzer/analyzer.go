@@ -347,6 +347,8 @@ func sendProgress(progress chan<- string, path string) {
 	}
 }
 
+const maxTopFiles = 500
+
 func insertTopFile(list []FileInfo, file FileInfo, minSize int64) []FileInfo {
 	if file.Size < minSize {
 		return list
@@ -354,16 +356,22 @@ func insertTopFile(list []FileInfo, file FileInfo, minSize int64) []FileInfo {
 	idx := sort.Search(len(list), func(i int) bool {
 		return list[i].Size < file.Size
 	})
+	if idx >= maxTopFiles {
+		return list
+	}
 	list = append(list, FileInfo{})
 	copy(list[idx+1:], list[idx:])
 	list[idx] = file
+	if len(list) > maxTopFiles {
+		list = list[:maxTopFiles]
+	}
 	return list
 }
 
 func mergeTopFiles(a, b []FileInfo) []FileInfo {
 	merged := make([]FileInfo, 0, len(a)+len(b))
 	i, j := 0, 0
-	for i < len(a) || j < len(b) {
+	for (i < len(a) || j < len(b)) && len(merged) < maxTopFiles {
 		if i < len(a) && (j >= len(b) || a[i].Size >= b[j].Size) {
 			merged = append(merged, a[i])
 			i++
