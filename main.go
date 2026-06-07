@@ -914,10 +914,11 @@ func (m model) View() string {
 		tabBar := lipgloss.JoinHorizontal(lipgloss.Top, dirTab, topTab)
 		leftPane.WriteString(tabBar + "\n\n")
 
+		listViewStyle := lipgloss.NewStyle().Width(leftWidth)
 		if m.activeTab == 0 {
-			leftPane.WriteString(m.list.View())
+			leftPane.WriteString(listViewStyle.Render(m.list.View()))
 		} else {
-			leftPane.WriteString(m.topList.View())
+			leftPane.WriteString(listViewStyle.Render(m.topList.View()))
 		}
 
 		var rightPane strings.Builder
