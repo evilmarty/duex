@@ -8,7 +8,7 @@
 
 `duex` is a fast, interactive terminal-based disk usage utility written in Go. It helps you understand what is consuming space on your drives by providing a navigable, visual breakdown of folders and files.
 
-![duex preview](assets/preview.png)
+![duex demo](assets/demo.gif)
 
 ## Features
 
