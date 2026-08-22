@@ -27,7 +27,7 @@
 ### Using Homebrew
 
 ```bash
-brew install evilmarty/duex/duex
+brew install evilmarty/tap/duex
 ```
 
 ### Using Go

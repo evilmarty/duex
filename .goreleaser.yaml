@@ -55,6 +55,8 @@ brews:
     description: "Duex is a Go-based terminal utility for visualizing and analyzing disk usage, featuring interactive navigation, accurate sizing, and real-time feedback."
     license: "MIT"
     custom_block: |
+      deprecate! date: "2026-08-22", because: "it has moved to the evilmarty/tap repository"
+
       head do
         url "https://github.com/evilmarty/duex.git", branch: "main"
         depends_on "go" => :build
