@@ -81,6 +81,30 @@ Or provide a specific path to scan:
 | `-c`, `--cross-mounts` | Allow crossing filesystem boundaries |
 | `-m`, `--min-size` | Minimum file size to include in top files (default: 100mb) |
 
+### Scanning the macOS startup disk
+
+Run `duex /` to explore the startup disk. On macOS Catalina and later, root
+scans include both the System and Data volumes without requiring `--cross-mounts`.
+Other mounted filesystems remain excluded unless that flag is enabled.
+Navigating through `/System/Volumes` also permits the startup Data volume.
+
+macOS exposes some Data-volume directories twice through *firmlinks*: for example,
+`/Users` and `/System/Volumes/Data/Users`. When both paths are inside a scan,
+`duex` uses `/usr/share/firmlinks` to count the normal path and skip its backing
+subtree. Data-volume content without a firmlink is still included. A notice
+shows how many duplicate subtrees were excluded; they are not permission errors.
+The **Aliases** count in the Details panel shows the number of duplicate firmlink
+subtrees excluded from the selected directory's total.
+
+Opening `/System/Volumes/Data` directly scans its contents normally, since the
+root-level aliases are outside that scan. Its total can therefore exceed its
+contribution to a root scan. Cached subtree totals are not reused for scans
+that exclude firmlink aliases.
+
+Sizes reflect allocated file blocks, not necessarily reclaimable space: APFS
+clones and snapshots share storage that cannot be deduplicated by summing file
+block counts.
+
 ### Keyboard Shortcuts
 
 | Key | Action |

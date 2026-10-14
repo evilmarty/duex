@@ -411,7 +411,6 @@ func TestErrorClearingOnScan(t *testing.T) {
 	}
 }
 
-
 func TestUpdateKeyEnter(t *testing.T) {
 	// Enter directory -> trigger scan
 	m := initialModel("/my/test/path")
@@ -482,6 +481,33 @@ func TestUpdateKeyBackspace(t *testing.T) {
 	}
 	if len(m2.history) != 1 || m2.history[0] != "/my/test/path/subfolder" {
 		t.Errorf("expected parent navigation to update history, got %v", m2.history)
+	}
+}
+
+func TestFirmlinkNoticeRendering(t *testing.T) {
+	m := initialModel("/")
+	m.width, m.height, m.loading = 120, 30, false
+	res := analyzer.Result{
+		TotalSize:       4096,
+		ExcludedAliases: 2,
+		Files: []analyzer.FileInfo{
+			{Name: "System", IsDir: true, Size: 4096, ExcludedAliases: 2},
+		},
+	}
+	m.setItems(res)
+	m.list.Select(1)
+	view := stripAnsi(m.View())
+	if !strings.Contains(view, "2 firmlink aliases excluded; counted at their normal paths.") ||
+		!strings.Contains(view, "Aliases: 2") {
+		t.Fatalf("expected alias notice and directory details:\n%s", view)
+	}
+	if strings.Contains(view, "permission errors") {
+		t.Fatalf("aliases must not be displayed as errors:\n%s", view)
+	}
+	heightWithNotice := m.list.Height()
+	m.setItems(analyzer.Result{TotalSize: 4096})
+	if strings.Contains(stripAnsi(m.View()), "firmlink aliases") || m.list.Height() != heightWithNotice+1 {
+		t.Fatal("notice or its reserved layout space persisted after changing scans")
 	}
 }
 
@@ -682,7 +708,7 @@ func TestItemDelegateRender(t *testing.T) {
 	// Make sure we have a width set in list
 	l := list.New([]list.Item{it}, itemDelegate{}, 100, 20)
 	w := &strings.Builder{}
-	
+
 	// Test rendering delegate (should not panic)
 	itemDelegate{}.Render(w, l, 0, it)
 	if w.Len() == 0 {
@@ -998,7 +1024,7 @@ func TestStartScanAndProgressCommands(t *testing.T) {
 
 	// Send progress path
 	m.progressChan <- "somepath"
-	
+
 	// Call waitForProgress to get command
 	progressCmd := m.waitForProgress(m.progressChan)
 	progressMsgVal := progressCmd()
