@@ -347,29 +347,30 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 }
 
 type model struct {
-	path               string
-	selected           map[int]struct{}
-	err                error
-	loading            bool
-	width              int
-	height             int
-	dirCache           map[string]analyzer.Result
-	spinner            spinner.Model
-	scannedPaths       []string
-	progressChan       chan string
-	list               list.Model
-	topList            list.Model
-	activeTab          int // 0 = Directory, 1 = Top Files
-	targetFileToSelect string
-	cancel             context.CancelFunc
-	history            []string
-	help               help.Model
-	oneFileSystem      bool
-	minSize            int64
-	errorsCount        int64 // Track permission/access errors in currently viewed path
-	errorsPtr          *int64 // Pointer to the errors count passed to the analyzer
-	deleteTarget       *analyzer.FileInfo
-	deleting           bool
+	path                  string
+	selected              map[int]struct{}
+	err                   error
+	loading               bool
+	width                 int
+	height                int
+	dirCache              map[string]analyzer.Result
+	spinner               spinner.Model
+	scannedPaths          []string
+	progressChan          chan string
+	list                  list.Model
+	topList               list.Model
+	activeTab             int // 0 = Directory, 1 = Top Files
+	targetFileToSelect    string
+	cancel                context.CancelFunc
+	history               []string
+	help                  help.Model
+	oneFileSystem         bool
+	minSize               int64
+	errorsCount           int64 // Track permission/access errors in currently viewed path
+	excludedAliases       int
+	errorsPtr             *int64 // Pointer to the errors count passed to the analyzer
+	deleteTarget          *analyzer.FileInfo
+	deleting              bool
 	confirmDeleteSelected bool
 }
 
@@ -743,6 +744,9 @@ func (m *model) updateListSizes() {
 	if m.errorsCount > 0 {
 		overhead = 12
 	}
+	if m.excludedAliases > 0 {
+		overhead++
+	}
 	listHeight := m.height - overhead
 	if listHeight < 5 {
 		listHeight = 5
@@ -755,6 +759,7 @@ func (m *model) updateListSizes() {
 func (m *model) setItems(res analyzer.Result) {
 	m.err = nil
 	m.errorsCount = res.ErrorsCount
+	m.excludedAliases = res.ExcludedAliases
 	m.updateListSizes()
 	files := res.Files
 	sort.Slice(files, func(i, j int) bool {
@@ -766,12 +771,13 @@ func (m *model) setItems(res analyzer.Result) {
 	// Inject current directory item if we have data
 	if res.TotalSize > 0 || len(res.Breakdown) > 0 {
 		items = append(items, item{analyzer.FileInfo{
-			Name:        ".",
-			Path:        m.path,
-			Size:        res.TotalSize,
-			IsDir:       true,
-			Breakdown:   res.Breakdown,
-			ErrorsCount: res.ErrorsCount,
+			Name:            ".",
+			Path:            m.path,
+			Size:            res.TotalSize,
+			IsDir:           true,
+			Breakdown:       res.Breakdown,
+			ErrorsCount:     res.ErrorsCount,
+			ExcludedAliases: res.ExcludedAliases,
 		}})
 	}
 
@@ -946,6 +952,9 @@ func (m model) View() string {
 			rightPane.WriteString(fmt.Sprintf("Name: %s\n", selected.Name))
 			rightPane.WriteString(fmt.Sprintf("Size: %s\n", formatSize(selected.Size)))
 			rightPane.WriteString(fmt.Sprintf("Type: %s\n", getType(selected)))
+			if selected.ExcludedAliases > 0 {
+				rightPane.WriteString(fmt.Sprintf("Aliases: %d\n", selected.ExcludedAliases))
+			}
 
 			if m.activeTab == 1 {
 				rel, err := filepath.Rel(m.path, selected.Path)
@@ -957,6 +966,9 @@ func (m model) View() string {
 
 			if selected.IsDir {
 				availableHeight := m.list.Height() - 7
+				if selected.ExcludedAliases > 0 {
+					availableHeight--
+				}
 				if availableHeight > 0 {
 					rightPane.WriteString("\n" + lipgloss.NewStyle().Bold(true).Render("Breakdown") + "\n")
 					for i, b := range selected.Breakdown {
@@ -971,6 +983,10 @@ func (m model) View() string {
 		}
 
 		var footerBuilder strings.Builder
+		if m.excludedAliases > 0 {
+			notice := fmt.Sprintf("macOS: %d firmlink aliases excluded; counted at their normal paths.", m.excludedAliases)
+			footerBuilder.WriteString("\n" + faintStyle.Render(truncate(notice, m.width-4)))
+		}
 		if m.errorsCount > 0 {
 			warningStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#D1A100")).

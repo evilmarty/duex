@@ -23,7 +23,7 @@ var getFileStats = func(info os.FileInfo) fileStats {
 	}
 
 	// Physical size is blocks * 512 bytes on most Unix systems.
-	// This correctly handles sparse files and clones on APFS.
+	// This handles sparse files, but cannot deduplicate shared APFS clone blocks.
 	size := stat.Blocks * 512
 
 	return fileStats{

@@ -20,22 +20,24 @@ type Breakdown struct {
 
 // FileInfo represents information about a file or directory.
 type FileInfo struct {
-	Name         string
-	Path         string
-	Size         int64
-	IsDir        bool
-	Breakdown    []Breakdown
-	IsUnreadable bool  // Set to true if this file/directory could not be read
-	ErrorsCount  int64 // Number of unreadable items inside this directory
+	Name            string
+	Path            string
+	Size            int64
+	IsDir           bool
+	Breakdown       []Breakdown
+	IsUnreadable    bool  // Set to true if this file/directory could not be read
+	ErrorsCount     int64 // Number of unreadable items inside this directory
+	ExcludedAliases int   // Firmlink subtrees counted at their canonical paths
 }
 
 // Result contains the analysis results for a directory.
 type Result struct {
-	Files       []FileInfo
-	TotalSize   int64
-	Breakdown   []Breakdown
-	ErrorsCount int64
-	TopFiles    []FileInfo
+	Files           []FileInfo
+	TotalSize       int64
+	Breakdown       []Breakdown
+	ErrorsCount     int64
+	TopFiles        []FileInfo
+	ExcludedAliases int
 }
 
 // readDir is the function used to list directory entries. It can be overridden
@@ -49,6 +51,15 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 	entries, err := listDir(root)
 	if err != nil {
 		return Result{}, err
+	}
+
+	policy, err := loadScanPolicy(root, oneFileSystem)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(policy.aliases) > 0 || policy.dataDev != nil {
+		// Standalone cached scans may include backing paths excluded in this scan.
+		cache = nil
 	}
 
 	var rootDev uint64
@@ -92,7 +103,13 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 		entryStats := getFileStats(info)
 
 		if entry.IsDir() {
-			if oneFileSystem && entryStats.Dev != rootDev {
+			if policy.excludes(path) {
+				mu.Lock()
+				result.ExcludedAliases++
+				mu.Unlock()
+				continue
+			}
+			if oneFileSystem && !policy.allowsDevice(entryStats.Dev, rootDev) {
 				continue
 			}
 
@@ -117,19 +134,21 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 			wg.Add(1)
 			go func(p string, n string) {
 				defer wg.Done()
-				size, breakdown, errs, dirTopFiles := DirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount, minSize)
+				size, breakdown, errs, dirTopFiles, excluded := dirSize(ctx, p, progress, &seen, cache, oneFileSystem, rootDev, errorsCount, minSize, policy)
 				mu.Lock()
 				result.Files = append(result.Files, FileInfo{
-					Name:         n,
-					Path:         p,
-					Size:         size,
-					IsDir:        true,
-					Breakdown:    breakdown,
-					IsUnreadable: size == 0 && errs > 0,
-					ErrorsCount:  errs,
+					Name:            n,
+					Path:            p,
+					Size:            size,
+					IsDir:           true,
+					Breakdown:       breakdown,
+					IsUnreadable:    size == 0 && errs > 0,
+					ErrorsCount:     errs,
+					ExcludedAliases: excluded,
 				})
 				result.TotalSize += size
 				result.ErrorsCount += errs
+				result.ExcludedAliases += excluded
 				result.TopFiles = mergeTopFiles(result.TopFiles, dirTopFiles)
 				mu.Unlock()
 			}(path, entry.Name())
@@ -186,13 +205,20 @@ func Analyze(ctx context.Context, root string, progress chan<- string, cache map
 // but at most runtime.NumCPU() goroutines perform filesystem I/O concurrently via a
 // semaphore. This eliminates the sequential bottleneck of filepath.WalkDir while
 // preventing resource exhaustion on deep or wide directory trees.
+// Use Analyze for platform-specific traversal rules such as macOS firmlink exclusions.
 func DirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64, minSize int64) (int64, []Breakdown, int64, []FileInfo) {
+	size, breakdown, errs, topFiles, _ := dirSize(ctx, path, progress, seen, cache, oneFileSystem, rootDev, errorsCount, minSize, scanPolicy{})
+	return size, breakdown, errs, topFiles
+}
+
+func dirSize(ctx context.Context, path string, progress chan<- string, seen *sync.Map, cache map[string]Result, oneFileSystem bool, rootDev uint64, errorsCount *int64, minSize int64, policy scanPolicy) (int64, []Breakdown, int64, []FileInfo, int) {
 	var (
-		totalSize  int64
-		totalErrs  int64
-		extMu      sync.Mutex
-		extensions = make(map[string]int64)
-		wg         sync.WaitGroup
+		totalSize       int64
+		totalErrs       int64
+		excludedAliases int64
+		extMu           sync.Mutex
+		extensions      = make(map[string]int64)
+		wg              sync.WaitGroup
 
 		topFilesMu sync.Mutex
 		topFiles   []FileInfo
@@ -261,6 +287,10 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 			entryPath := filepath.Join(dirPath, entry.Name())
 
 			if entry.IsDir() {
+				if policy.excludes(entryPath) {
+					atomic.AddInt64(&excludedAliases, 1)
+					continue
+				}
 				if oneFileSystem {
 					info, err := entry.Info()
 					if err != nil {
@@ -270,7 +300,7 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 						}
 						continue
 					}
-					if getFileStats(info).Dev != rootDev {
+					if !policy.allowsDevice(getFileStats(info).Dev, rootDev) {
 						continue
 					}
 				}
@@ -325,7 +355,7 @@ func DirSize(ctx context.Context, path string, progress chan<- string, seen *syn
 		return breakdown[i].Size > breakdown[j].Size
 	})
 
-	return totalSize, breakdown, totalErrs, topFiles
+	return totalSize, breakdown, totalErrs, topFiles, int(excludedAliases)
 }
 
 func getPhysicalSize(info os.FileInfo, seen *sync.Map) int64 {
